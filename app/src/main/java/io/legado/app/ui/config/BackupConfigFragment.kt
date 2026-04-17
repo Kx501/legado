@@ -74,9 +74,7 @@ class BackupConfigFragment : PreferenceFragment(),
         private const val WEB_DAV_CONFIG_CATEGORY = "webDavConfigCategory"
         private const val QREAD_CONFIG_CATEGORY = "qreadConfigCategory"
         private const val QREAD_MODEL = "Legado-Android"
-        private const val QREAD_NEED_CODE_PATH = "/needcode"
         private const val QREAD_LOGIN_PATH_TEMPLATE = "/api/%d/login"
-        private const val QREAD_NEED_CODE_API_PATH_TEMPLATE = "/api/%d/needcode"
         private const val QREAD_PARAM_USERNAME = "username"
         private const val QREAD_PARAM_PASSWORD = "password"
         private const val QREAD_PARAM_MODEL = "model"
@@ -89,7 +87,6 @@ class BackupConfigFragment : PreferenceFragment(),
     private val waitDialog by lazy { WaitDialog(requireContext()) }
     private var backupJob: Job? = null
     private var restoreJob: Job? = null
-    private var qreadNeedInviteCode: Boolean? = null
 
     private val selectBackupPath = registerForActivityResult(HandleFileContract()) {
         it.uri?.let { uri ->
@@ -172,9 +169,7 @@ class BackupConfigFragment : PreferenceFragment(),
         upPreferenceSummary(qreadPassword, getPrefString(qreadPassword))
         upPreferenceSummary(qreadInviteCode, getPrefString(qreadInviteCode))
         upPreferenceSummary(PreferKey.backupPath, getPrefString(PreferKey.backupPath))
-        updateInviteCodePreferenceHint()
         updateConfigCategoryVisibility(getPrefString(remoteSyncMode))
-        detectQReadInviteCodeRequirement(getPrefString(qreadBaseUrl))
         findPreference<io.legado.app.lib.prefs.Preference>("web_dav_restore")
             ?.onLongClick {
                 restoreFromLocal()
@@ -231,9 +226,6 @@ class BackupConfigFragment : PreferenceFragment(),
                 upPreferenceSummary(key, appCtx.getPrefString(key))
                 if (key == remoteSyncMode) {
                     updateConfigCategoryVisibility(appCtx.getPrefString(remoteSyncMode))
-                }
-                if (key == qreadBaseUrl) {
-                    detectQReadInviteCodeRequirement(appCtx.getPrefString(qreadBaseUrl))
                 }
                 viewModel.upWebDavConfig()
             }
@@ -296,55 +288,6 @@ class BackupConfigFragment : PreferenceFragment(),
         findPreference<PreferenceCategory>(QREAD_CONFIG_CATEGORY)?.isVisible = !isWebDavMode
     }
 
-    private fun updateInviteCodePreferenceHint() {
-        val invitePreference = findPreference<Preference>(qreadInviteCode) ?: return
-        invitePreference.summary = when (qreadNeedInviteCode) {
-            true -> getString(R.string.qread_invite_code_required_s)
-            false -> getString(R.string.qread_invite_code_s)
-            null -> getString(R.string.qread_invite_code_detecting_s)
-        }
-    }
-
-    private fun detectQReadInviteCodeRequirement(rawBaseUrl: String?) {
-        val baseUrl = rawBaseUrl?.trim().orEmpty().trimEnd('/')
-        if (baseUrl.isBlank()) {
-            qreadNeedInviteCode = null
-            updateInviteCodePreferenceHint()
-            return
-        }
-        lifecycleScope.launch(IO) {
-            val detectResult = runCatching {
-                queryQReadNeedInviteCode(baseUrl)
-            }.getOrNull()
-            withContext(Main) {
-                qreadNeedInviteCode = detectResult
-                updateInviteCodePreferenceHint()
-            }
-        }
-    }
-
-    private fun queryQReadNeedInviteCode(baseUrl: String): Boolean? {
-        val detectPaths = mutableListOf("$baseUrl$QREAD_NEED_CODE_PATH")
-        QREAD_API_VERSIONS.forEach { version ->
-            detectPaths.add("$baseUrl${QREAD_NEED_CODE_API_PATH_TEMPLATE.format(version)}")
-        }
-        detectPaths.forEach { url ->
-            runCatching {
-                val request = Request.Builder().url(url).get().build()
-                io.legado.app.help.http.okHttpClient.newCall(request).execute().use { response ->
-                    if (!response.isSuccessful) return@use null
-                    val payload = response.body?.string().orEmpty()
-                    if (payload.isBlank()) return@use null
-                    val json = JSONObject(payload)
-                    json.optBoolean("isSuccess")
-                }
-            }.onSuccess { needCode ->
-                if (needCode != null) return needCode
-            }
-        }
-        return null
-    }
-
     override fun onPreferenceTreeClick(preference: Preference): Boolean {
         when (preference.key) {
             PreferKey.backupPath -> selectBackupPath.launch()
@@ -366,10 +309,6 @@ class BackupConfigFragment : PreferenceFragment(),
             appCtx.toastOnUi(R.string.qread_login_missing_required_fields)
             return
         }
-        if (qreadNeedInviteCode == true && inviteCode.isBlank()) {
-            appCtx.toastOnUi(R.string.qread_login_invite_code_required)
-            return
-        }
         waitDialog.setText(getString(R.string.qread_login_loading))
         waitDialog.show()
         lifecycleScope.launch(IO) {
@@ -383,7 +322,15 @@ class BackupConfigFragment : PreferenceFragment(),
                     } else {
                         appCtx.putPrefString(qreadToken, token)
                         upPreferenceSummary(qreadToken, token)
+                        val syncedSourceCount = runCatching {
+                            io.legado.app.help.remote.RemoteProgressBridge.syncBookSourcesFromQRead()
+                        }.onFailure {
+                            AppLog.put("QRead登录后同步书源失败\n${it.localizedMessage}", it)
+                        }.getOrDefault(0)
                         appCtx.toastOnUi(R.string.qread_login_success)
+                        appCtx.toastOnUi(
+                            getString(R.string.qread_source_sync_result, syncedSourceCount)
+                        )
                     }
                 }
             }.onFailure { error ->

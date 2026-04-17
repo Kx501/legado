@@ -857,6 +857,7 @@
     <string name="qread_login_invite_code_required">Current backend requires invite code</string>
     <string name="qread_login_token_empty">Login succeeded but no accessToken was returned</string>
     <string name="qread_login_success">QRead login succeeded, token updated</string>
+    <string name="qread_source_sync_result">QRead source sync finished, total %1$d source(s)</string>
     <string name="qread_login_failed">QRead login failed\n%s</string>
     <string name="sync_book_progress_success">Sync progress success</string>
     <string name="create_bookmark_error">Failed to create bookmark</string>

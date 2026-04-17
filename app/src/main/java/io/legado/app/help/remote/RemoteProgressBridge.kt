@@ -3,10 +3,13 @@ package io.legado.app.help.remote
 import io.legado.app.constant.AppLog
 import io.legado.app.data.appDb
 import io.legado.app.data.entities.Book
+import io.legado.app.data.entities.BookSource
 import io.legado.app.data.entities.BookProgress
 import io.legado.app.help.AppWebDav
 import io.legado.app.help.config.AppConfig
 import io.legado.app.help.http.okHttpClient
+import io.legado.app.utils.GSON
+import io.legado.app.utils.fromJsonArray
 import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.ensureActive
 import okhttp3.HttpUrl.Companion.toHttpUrl
@@ -38,9 +41,14 @@ object RemoteProgressBridge {
     private const val QREAD_PATH_GET_BOOKSHELF = "/api/%d/getBookshelf"
     private const val QREAD_PATH_SAVE_BOOK_PROGRESS = "/api/%d/saveBookProgress"
     private const val QREAD_PATH_SAVE_BOOKS = "/api/%d/saveBooks"
+    private const val QREAD_PATH_GET_BOOK_SOURCES_PAGE = "/api/%d/getBookSourcesPage"
+    private const val QREAD_PATH_GET_BOOK_SOURCES_NEW = "/api/%d/getBookSourcesNew"
+    private const val QREAD_PATH_GET_BOOK_SOURCE_JSON = "/api/%d/getbookSourcejson"
     private const val PARAM_ACCESS_TOKEN = "accessToken"
     private const val PARAM_VERSION = "version"
     private const val PARAM_NAME = "name"
+    private const val PARAM_MD5 = "md5"
+    private const val PARAM_PAGE = "page"
     private const val PARAM_URL = "url"
     private const val PARAM_POS = "pos"
     private const val PARAM_TITLE = "title"
@@ -50,6 +58,9 @@ object RemoteProgressBridge {
     private const val QREAD_ERROR_MSG = "errorMsg"
     private const val QREAD_DATA = "data"
     private const val QREAD_BOOK_URL = "bookUrl"
+    private const val QREAD_MD5 = "md5"
+    private const val QREAD_PAGE = "page"
+    private const val QREAD_BOOK_SOURCE_URL = "bookSourceUrl"
     private const val QREAD_NAME = "name"
     private const val QREAD_AUTHOR = "author"
     private const val QREAD_DUR_CHAPTER_INDEX = "durChapterIndex"
@@ -57,6 +68,7 @@ object RemoteProgressBridge {
     private const val QREAD_DUR_CHAPTER_TIME = "durChapterTime"
     private const val QREAD_DUR_CHAPTER_TITLE = "durChapterTitle"
     private const val QREAD_CONTENT_TYPE_JSON = "application/json; charset=utf-8"
+    private const val LOG_QREAD_PREFIX = "QRead请求失败"
 
     suspend fun uploadBookProgress(
         book: Book,
@@ -97,6 +109,24 @@ object RemoteProgressBridge {
         }
     }
 
+    suspend fun syncBookSourcesFromQRead(): Int {
+        val baseUrl = AppConfig.qreadBaseUrl.trimEnd('/')
+        val token = AppConfig.qreadToken
+        if (baseUrl.isBlank() || token.isBlank()) return 0
+        return try {
+            val sourceJson = fetchBookSourceJsonQRead(baseUrl, token)
+            if (sourceJson.isBlank()) return 0
+            val sources = GSON.fromJsonArray<BookSource>(sourceJson).getOrNull() ?: emptyList()
+            if (sources.isEmpty()) return 0
+            appDb.bookSourceDao.insert(*sources.toTypedArray())
+            sources.size
+        } catch (e: Exception) {
+            currentCoroutineContext().ensureActive()
+            AppLog.put("QRead同步书源异常\n${e.localizedMessage}", e)
+            0
+        }
+    }
+
     private suspend fun uploadBookProgressQRead(
         progress: BookProgress,
         onSuccess: (() -> Unit)? = null
@@ -134,11 +164,20 @@ object RemoteProgressBridge {
                     .post(form)
                     .build()
                 okHttpClient.newCall(request).execute().use { response ->
-                    if (!response.isSuccessful) return@use
+                    if (!response.isSuccessful) {
+                        AppLog.put("$LOG_QREAD_PREFIX saveBookProgress HTTP ${response.code}, v=$version")
+                        return@use
+                    }
                     val payload = response.body?.string().orEmpty()
                     val json = runCatching { JSONObject(payload) }.getOrNull() ?: return@use
                     if (json.optBoolean(QREAD_IS_SUCCESS, false)) {
                         uploadOk = true
+                    } else {
+                        AppLog.put(
+                            "$LOG_QREAD_PREFIX saveBookProgress isSuccess=false, v=$version, error=${
+                                json.optString(QREAD_ERROR_MSG)
+                            }"
+                        )
                     }
                 }
                 if (uploadOk) return@forEach
@@ -197,15 +236,143 @@ object RemoteProgressBridge {
                 .post(content.toRequestBody(QREAD_CONTENT_TYPE_JSON.toMediaType()))
                 .build()
             okHttpClient.newCall(request).execute().use { response ->
-                if (!response.isSuccessful) return@use
+                if (!response.isSuccessful) {
+                    AppLog.put("$LOG_QREAD_PREFIX saveBooks HTTP ${response.code}, v=$version")
+                    return@use
+                }
                 val body = response.body?.string().orEmpty()
                 val root = runCatching { JSONObject(body) }.getOrNull() ?: return@use
                 if (root.optBoolean(QREAD_IS_SUCCESS, false)) {
                     return true
+                } else {
+                    AppLog.put(
+                        "$LOG_QREAD_PREFIX saveBooks isSuccess=false, v=$version, error=${
+                            root.optString(QREAD_ERROR_MSG)
+                        }"
+                    )
                 }
             }
         }
         return false
+    }
+
+    private suspend fun fetchBookSourceJsonQRead(baseUrl: String, token: String): String {
+        QREAD_API_VERSIONS.forEach { version ->
+            val meta = fetchBookSourceMetaQRead(baseUrl, token, version) ?: return@forEach
+            val ids = fetchBookSourceIdsQRead(baseUrl, token, version, meta.second, meta.first)
+            if (ids.isEmpty()) return@forEach
+            val payload = fetchBookSourceJsonPayloadQRead(baseUrl, token, version, ids)
+            if (!payload.isNullOrBlank()) return payload
+        }
+        return ""
+    }
+
+    private suspend fun fetchBookSourceMetaQRead(
+        baseUrl: String,
+        token: String,
+        version: Int
+    ): Pair<Int, String>? {
+        val requestUrl = "$baseUrl${QREAD_PATH_GET_BOOK_SOURCES_PAGE.format(version)}".toHttpUrl()
+            .newBuilder()
+            .addQueryParameter(PARAM_ACCESS_TOKEN, token)
+            .build()
+        val request = Request.Builder().url(requestUrl).get().build()
+        okHttpClient.newCall(request).execute().use { response ->
+            if (!response.isSuccessful) {
+                AppLog.put("$LOG_QREAD_PREFIX getBookSourcesPage HTTP ${response.code}, v=$version")
+                return null
+            }
+            val body = response.body?.string().orEmpty()
+            val root = runCatching { JSONObject(body) }.getOrNull() ?: return null
+            if (!root.optBoolean(QREAD_IS_SUCCESS, false)) {
+                AppLog.put(
+                    "$LOG_QREAD_PREFIX getBookSourcesPage isSuccess=false, v=$version, error=${
+                        root.optString(QREAD_ERROR_MSG)
+                    }"
+                )
+                return null
+            }
+            val data = root.optJSONObject(QREAD_DATA) ?: return null
+            val page = data.optInt(QREAD_PAGE, 0)
+            val md5 = data.optString(QREAD_MD5).orEmpty()
+            if (page <= 0 || md5.isBlank()) return null
+            return page to md5
+        }
+    }
+
+    private suspend fun fetchBookSourceIdsQRead(
+        baseUrl: String,
+        token: String,
+        version: Int,
+        md5: String,
+        pageCount: Int
+    ): List<String> {
+        val ids = linkedSetOf<String>()
+        for (page in 1..pageCount) {
+            val requestUrl = "$baseUrl${QREAD_PATH_GET_BOOK_SOURCES_NEW.format(version)}".toHttpUrl()
+                .newBuilder()
+                .addQueryParameter(PARAM_ACCESS_TOKEN, token)
+                .addQueryParameter(PARAM_MD5, md5)
+                .addQueryParameter(PARAM_PAGE, page.toString())
+                .build()
+            val request = Request.Builder().url(requestUrl).get().build()
+            okHttpClient.newCall(request).execute().use { response ->
+                if (!response.isSuccessful) {
+                    AppLog.put("$LOG_QREAD_PREFIX getBookSourcesNew HTTP ${response.code}, v=$version, page=$page")
+                    return@use
+                }
+                val body = response.body?.string().orEmpty()
+                val root = runCatching { JSONObject(body) }.getOrNull() ?: return@use
+                if (!root.optBoolean(QREAD_IS_SUCCESS, false)) {
+                    AppLog.put(
+                        "$LOG_QREAD_PREFIX getBookSourcesNew isSuccess=false, v=$version, page=$page, error=${
+                            root.optString(QREAD_ERROR_MSG)
+                        }"
+                    )
+                    return@use
+                }
+                val data = root.optJSONArray(QREAD_DATA) ?: return@use
+                for (i in 0 until data.length()) {
+                    val item = data.optJSONObject(i) ?: continue
+                    val id = item.optString(QREAD_BOOK_SOURCE_URL).orEmpty()
+                    if (id.isNotBlank()) ids.add(id)
+                }
+            }
+        }
+        return ids.toList()
+    }
+
+    private suspend fun fetchBookSourceJsonPayloadQRead(
+        baseUrl: String,
+        token: String,
+        version: Int,
+        ids: List<String>
+    ): String? {
+        val requestUrl = "$baseUrl${QREAD_PATH_GET_BOOK_SOURCE_JSON.format(version)}".toHttpUrl()
+            .newBuilder()
+            .addQueryParameter(PARAM_ACCESS_TOKEN, token)
+            .build()
+        val request = Request.Builder()
+            .url(requestUrl)
+            .post(JSONArray(ids).toString().toRequestBody(QREAD_CONTENT_TYPE_JSON.toMediaType()))
+            .build()
+        okHttpClient.newCall(request).execute().use { response ->
+            if (!response.isSuccessful) {
+                AppLog.put("$LOG_QREAD_PREFIX getbookSourcejson HTTP ${response.code}, v=$version")
+                return null
+            }
+            val body = response.body?.string().orEmpty()
+            val root = runCatching { JSONObject(body) }.getOrNull() ?: return null
+            if (!root.optBoolean(QREAD_IS_SUCCESS, false)) {
+                AppLog.put(
+                    "$LOG_QREAD_PREFIX getbookSourcejson isSuccess=false, v=$version, error=${
+                        root.optString(QREAD_ERROR_MSG)
+                    }"
+                )
+                return null
+            }
+            return root.optString(QREAD_DATA)
+        }
     }
 
     private suspend fun getBookProgressQRead(book: Book): BookProgress? {
@@ -248,13 +415,16 @@ object RemoteProgressBridge {
                 .get()
                 .build()
             okHttpClient.newCall(request).execute().use { response ->
-                if (!response.isSuccessful) return@use
+                if (!response.isSuccessful) {
+                    AppLog.put("$LOG_QREAD_PREFIX getBookshelf HTTP ${response.code}, v=$version")
+                    return@use
+                }
                 val body = response.body?.string().orEmpty()
                 val root = runCatching { JSONObject(body) }.getOrNull() ?: return@use
                 if (!root.optBoolean(QREAD_IS_SUCCESS, false)) {
                     val errorMsg = root.optString(QREAD_ERROR_MSG)
                     if (errorMsg.isNotBlank()) {
-                        AppLog.put("QRead拉取书架失败: $errorMsg")
+                        AppLog.put("$LOG_QREAD_PREFIX getBookshelf isSuccess=false, v=$version, error=$errorMsg")
                     }
                     return@use
                 }
