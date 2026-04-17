@@ -5,11 +5,13 @@ import io.legado.app.data.appDb
 import io.legado.app.data.entities.Book
 import io.legado.app.data.entities.BookSource
 import io.legado.app.data.entities.BookProgress
+import io.legado.app.data.entities.RssSource
 import io.legado.app.help.AppWebDav
 import io.legado.app.help.config.AppConfig
 import io.legado.app.help.http.okHttpClient
 import io.legado.app.utils.GSON
 import io.legado.app.utils.fromJsonArray
+import io.legado.app.utils.fromJsonObject
 import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.ensureActive
 import okhttp3.HttpUrl.Companion.toHttpUrl
@@ -44,6 +46,9 @@ object RemoteProgressBridge {
     private const val QREAD_PATH_GET_BOOK_SOURCES_PAGE = "/api/%d/getBookSourcesPage"
     private const val QREAD_PATH_GET_BOOK_SOURCES_NEW = "/api/%d/getBookSourcesNew"
     private const val QREAD_PATH_GET_BOOK_SOURCE_JSON = "/api/%d/getbookSourcejson"
+    private const val QREAD_PATH_GET_RSS_SOURCES_PAGE = "/api/%d/getRssSourcessPage"
+    private const val QREAD_PATH_GET_RSS_SOURCES_NEW = "/api/%d/getRssSourcessNew"
+    private const val QREAD_PATH_GET_RSS_SOURCE = "/api/%d/getRssSources"
     private const val PARAM_ACCESS_TOKEN = "accessToken"
     private const val PARAM_VERSION = "version"
     private const val PARAM_NAME = "name"
@@ -61,6 +66,10 @@ object RemoteProgressBridge {
     private const val QREAD_MD5 = "md5"
     private const val QREAD_PAGE = "page"
     private const val QREAD_BOOK_SOURCE_URL = "bookSourceUrl"
+    private const val QREAD_SOURCE_URL = "sourceUrl"
+    private const val QREAD_SOURCE_GROUP = "sourceGroup"
+    private const val QREAD_ENABLED = "enabled"
+    private const val QREAD_JSON = "json"
     private const val QREAD_NAME = "name"
     private const val QREAD_AUTHOR = "author"
     private const val QREAD_DUR_CHAPTER_INDEX = "durChapterIndex"
@@ -123,6 +132,30 @@ object RemoteProgressBridge {
         } catch (e: Exception) {
             currentCoroutineContext().ensureActive()
             AppLog.put("QRead同步书源异常\n${e.localizedMessage}", e)
+            0
+        }
+    }
+
+    suspend fun syncRssSourcesFromQRead(): Int {
+        val baseUrl = AppConfig.qreadBaseUrl.trimEnd('/')
+        val token = AppConfig.qreadToken
+        if (baseUrl.isBlank() || token.isBlank()) return 0
+        return try {
+            val summaries = fetchRssSourceSummariesQRead(baseUrl, token)
+            if (summaries.isEmpty()) return 0
+            val rssSources = mutableListOf<RssSource>()
+            summaries.forEach { summary ->
+                val source = fetchRssSourceDetailQRead(baseUrl, token, summary.sourceUrl) ?: return@forEach
+                source.enabled = summary.enabled
+                source.sourceGroup = summary.sourceGroup
+                rssSources.add(source)
+            }
+            if (rssSources.isEmpty()) return 0
+            appDb.rssSourceDao.insert(*rssSources.toTypedArray())
+            rssSources.size
+        } catch (e: Exception) {
+            currentCoroutineContext().ensureActive()
+            AppLog.put("QRead同步订阅源异常\n${e.localizedMessage}", e)
             0
         }
     }
@@ -375,6 +408,159 @@ object RemoteProgressBridge {
         }
     }
 
+    private suspend fun fetchRssSourceSummariesQRead(
+        baseUrl: String,
+        token: String
+    ): List<QReadRssSourceSummary> {
+        QREAD_API_VERSIONS.forEach { version ->
+            val meta = fetchPagedMetaQRead(
+                baseUrl = baseUrl,
+                token = token,
+                pathTemplate = QREAD_PATH_GET_RSS_SOURCES_PAGE,
+                requestName = "getRssSourcessPage",
+                version = version
+            ) ?: return@forEach
+            val summaries = fetchPagedSourceSummariesQRead(
+                baseUrl = baseUrl,
+                token = token,
+                version = version,
+                pathTemplate = QREAD_PATH_GET_RSS_SOURCES_NEW,
+                requestName = "getRssSourcessNew",
+                md5 = meta.second,
+                pageCount = meta.first,
+                idField = QREAD_SOURCE_URL,
+                groupField = QREAD_SOURCE_GROUP,
+                enabledField = QREAD_ENABLED
+            )
+            if (summaries.isNotEmpty()) return summaries
+        }
+        return emptyList()
+    }
+
+    private suspend fun fetchRssSourceDetailQRead(
+        baseUrl: String,
+        token: String,
+        sourceUrl: String
+    ): RssSource? {
+        QREAD_API_VERSIONS.forEach { version ->
+            val requestUrl = "$baseUrl${QREAD_PATH_GET_RSS_SOURCE.format(version)}".toHttpUrl()
+                .newBuilder()
+                .addQueryParameter(PARAM_ACCESS_TOKEN, token)
+                .addQueryParameter("id", sourceUrl)
+                .build()
+            val request = Request.Builder().url(requestUrl).get().build()
+            okHttpClient.newCall(request).execute().use { response ->
+                if (!response.isSuccessful) {
+                    AppLog.put("$LOG_QREAD_PREFIX getRssSources HTTP ${response.code}, v=$version")
+                    return@use
+                }
+                val body = response.body?.string().orEmpty()
+                val root = runCatching { JSONObject(body) }.getOrNull() ?: return@use
+                if (!root.optBoolean(QREAD_IS_SUCCESS, false)) {
+                    AppLog.put(
+                        "$LOG_QREAD_PREFIX getRssSources isSuccess=false, v=$version, error=${
+                            root.optString(QREAD_ERROR_MSG)
+                        }"
+                    )
+                    return@use
+                }
+                val data = root.optJSONObject(QREAD_DATA) ?: return@use
+                val sourceJson = data.optString(QREAD_JSON).orEmpty()
+                if (sourceJson.isBlank()) return@use
+                val source = GSON.fromJsonObject<RssSource>(sourceJson).getOrNull() ?: return@use
+                return source
+            }
+        }
+        return null
+    }
+
+    private suspend fun fetchPagedMetaQRead(
+        baseUrl: String,
+        token: String,
+        pathTemplate: String,
+        requestName: String,
+        version: Int
+    ): Pair<Int, String>? {
+        val requestUrl = "$baseUrl${pathTemplate.format(version)}".toHttpUrl()
+            .newBuilder()
+            .addQueryParameter(PARAM_ACCESS_TOKEN, token)
+            .build()
+        val request = Request.Builder().url(requestUrl).get().build()
+        okHttpClient.newCall(request).execute().use { response ->
+            if (!response.isSuccessful) {
+                AppLog.put("$LOG_QREAD_PREFIX $requestName HTTP ${response.code}, v=$version")
+                return null
+            }
+            val body = response.body?.string().orEmpty()
+            val root = runCatching { JSONObject(body) }.getOrNull() ?: return null
+            if (!root.optBoolean(QREAD_IS_SUCCESS, false)) {
+                AppLog.put(
+                    "$LOG_QREAD_PREFIX $requestName isSuccess=false, v=$version, error=${
+                        root.optString(QREAD_ERROR_MSG)
+                    }"
+                )
+                return null
+            }
+            val data = root.optJSONObject(QREAD_DATA) ?: return null
+            val page = data.optInt(QREAD_PAGE, 0)
+            val md5 = data.optString(QREAD_MD5).orEmpty()
+            if (page <= 0 || md5.isBlank()) return null
+            return page to md5
+        }
+    }
+
+    private suspend fun fetchPagedSourceSummariesQRead(
+        baseUrl: String,
+        token: String,
+        version: Int,
+        pathTemplate: String,
+        requestName: String,
+        md5: String,
+        pageCount: Int,
+        idField: String,
+        groupField: String,
+        enabledField: String
+    ): List<QReadRssSourceSummary> {
+        val summaries = linkedMapOf<String, QReadRssSourceSummary>()
+        for (page in 1..pageCount) {
+            val requestUrl = "$baseUrl${pathTemplate.format(version)}".toHttpUrl()
+                .newBuilder()
+                .addQueryParameter(PARAM_ACCESS_TOKEN, token)
+                .addQueryParameter(PARAM_MD5, md5)
+                .addQueryParameter(PARAM_PAGE, page.toString())
+                .build()
+            val request = Request.Builder().url(requestUrl).get().build()
+            okHttpClient.newCall(request).execute().use { response ->
+                if (!response.isSuccessful) {
+                    AppLog.put("$LOG_QREAD_PREFIX $requestName HTTP ${response.code}, v=$version, page=$page")
+                    return@use
+                }
+                val body = response.body?.string().orEmpty()
+                val root = runCatching { JSONObject(body) }.getOrNull() ?: return@use
+                if (!root.optBoolean(QREAD_IS_SUCCESS, false)) {
+                    AppLog.put(
+                        "$LOG_QREAD_PREFIX $requestName isSuccess=false, v=$version, page=$page, error=${
+                            root.optString(QREAD_ERROR_MSG)
+                        }"
+                    )
+                    return@use
+                }
+                val data = root.optJSONArray(QREAD_DATA) ?: return@use
+                for (i in 0 until data.length()) {
+                    val item = data.optJSONObject(i) ?: continue
+                    val sourceUrl = item.optString(idField).orEmpty()
+                    if (sourceUrl.isBlank()) continue
+                    summaries[sourceUrl] = QReadRssSourceSummary(
+                        sourceUrl = sourceUrl,
+                        sourceGroup = item.optString(groupField).ifBlank { null },
+                        enabled = item.optBoolean(enabledField, true)
+                    )
+                }
+            }
+        }
+        return summaries.values.toList()
+    }
+
     private suspend fun getBookProgressQRead(book: Book): BookProgress? {
         val baseUrl = AppConfig.qreadBaseUrl.trimEnd('/')
         val token = AppConfig.qreadToken
@@ -482,6 +668,12 @@ object RemoteProgressBridge {
         }
     }
 }
+
+private data class QReadRssSourceSummary(
+    val sourceUrl: String,
+    val sourceGroup: String?,
+    val enabled: Boolean
+)
 
 private data class QReadBookProgressPayload(
     val name: String,

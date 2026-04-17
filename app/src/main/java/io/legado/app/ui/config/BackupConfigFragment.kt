@@ -314,7 +314,19 @@ class BackupConfigFragment : PreferenceFragment(),
         lifecycleScope.launch(IO) {
             runCatching {
                 requestQReadToken(baseUrl, username, password, inviteCode)
-            }.onSuccess { token ->
+            }.mapCatching { token ->
+                val syncedBookSourceCount = if (token.isNullOrBlank()) {
+                    0
+                } else {
+                    io.legado.app.help.remote.RemoteProgressBridge.syncBookSourcesFromQRead()
+                }
+                val syncedRssSourceCount = if (token.isNullOrBlank()) {
+                    0
+                } else {
+                    io.legado.app.help.remote.RemoteProgressBridge.syncRssSourcesFromQRead()
+                }
+                Triple(token, syncedBookSourceCount, syncedRssSourceCount)
+            }.onSuccess { (token, syncedBookSourceCount, syncedRssSourceCount) ->
                 withContext(Main) {
                     waitDialog.dismiss()
                     if (token.isNullOrBlank()) {
@@ -322,14 +334,12 @@ class BackupConfigFragment : PreferenceFragment(),
                     } else {
                         appCtx.putPrefString(qreadToken, token)
                         upPreferenceSummary(qreadToken, token)
-                        val syncedSourceCount = runCatching {
-                            io.legado.app.help.remote.RemoteProgressBridge.syncBookSourcesFromQRead()
-                        }.onFailure {
-                            AppLog.put("QRead登录后同步书源失败\n${it.localizedMessage}", it)
-                        }.getOrDefault(0)
                         appCtx.toastOnUi(R.string.qread_login_success)
                         appCtx.toastOnUi(
-                            getString(R.string.qread_source_sync_result, syncedSourceCount)
+                            getString(R.string.qread_source_sync_result, syncedBookSourceCount)
+                        )
+                        appCtx.toastOnUi(
+                            getString(R.string.qread_rss_source_sync_result, syncedRssSourceCount)
                         )
                     }
                 }
