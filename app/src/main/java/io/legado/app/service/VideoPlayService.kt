@@ -234,6 +234,7 @@ class VideoPlayService : BaseService() {
         return super.onStartCommand(intent, flags, startId)
     }
 
+    @Suppress("DEPRECATION")
     @SuppressLint("UnspecifiedImmutableFlag")
     private fun initMediaSession() {
         mediaSessionCompat.setFlags(

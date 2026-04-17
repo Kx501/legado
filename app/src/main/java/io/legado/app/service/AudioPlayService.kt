@@ -514,6 +514,7 @@ class AudioPlayService : BaseService(),
     /**
      * 初始化MediaSession, 注册多媒体按钮
      */
+    @Suppress("DEPRECATION")
     @SuppressLint("UnspecifiedImmutableFlag")
     private fun initMediaSession() {
         mediaSessionCompat.setFlags(
