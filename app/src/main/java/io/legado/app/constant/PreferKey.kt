@@ -181,6 +181,9 @@ object PreferKey {
     const val disableMangaPageAnim = "disableMangaPageAnim"
     const val paddingDisplayCutouts = "paddingDisplayCutouts"
     const val autoCheckNewBackup = "autoCheckNewBackup"
+    const val remoteSyncMode = "remoteSyncMode"
+    const val qreadBaseUrl = "qreadBaseUrl"
+    const val qreadToken = "qreadToken"
 
     const val dThemeName = "durThemeName"
     const val dNThemeName = "durThemeNameNight"

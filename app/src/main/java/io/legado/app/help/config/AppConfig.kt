@@ -541,6 +541,12 @@ object AppConfig : SharedPreferences.OnSharedPreferenceChangeListener {
 
     val syncBookProgressPlus get() = appCtx.getPrefBoolean(PreferKey.syncBookProgressPlus, false)
 
+    val remoteSyncMode get() = appCtx.getPrefString(PreferKey.remoteSyncMode, "webdav") ?: "webdav"
+
+    val qreadBaseUrl get() = appCtx.getPrefString(PreferKey.qreadBaseUrl)?.trim().orEmpty()
+
+    val qreadToken get() = appCtx.getPrefString(PreferKey.qreadToken)?.trim().orEmpty()
+
     val mediaButtonOnExit get() = appCtx.getPrefBoolean("mediaButtonOnExit", true)
 
     val readAloudByMediaButton
