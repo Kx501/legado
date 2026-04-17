@@ -43,17 +43,15 @@ object RemoteProgressBridge {
     private const val QREAD_PATH_GET_BOOKSHELF = "/api/%d/getBookshelf"
     private const val QREAD_PATH_SAVE_BOOK_PROGRESS = "/api/%d/saveBookProgress"
     private const val QREAD_PATH_SAVE_BOOKS = "/api/%d/saveBooks"
-    private const val QREAD_PATH_GET_BOOK_SOURCES_PAGE = "/api/%d/getBookSourcesPage"
-    private const val QREAD_PATH_GET_BOOK_SOURCES_NEW = "/api/%d/getBookSourcesNew"
+    /** ReadController：一次返回书源摘要列表（与轻阅读一致），再 POST getbookSourcejson 拉全文 */
+    private const val QREAD_PATH_GET_BOOK_SOURCES_LIST = "/api/%d/getBookSources"
     private const val QREAD_PATH_GET_BOOK_SOURCE_JSON = "/api/%d/getbookSourcejson"
-    private const val QREAD_PATH_GET_RSS_SOURCES_PAGE = "/api/%d/getRssSourcessPage"
-    private const val QREAD_PATH_GET_RSS_SOURCES_NEW = "/api/%d/getRssSourcessNew"
+    /** RssController：一次返回订阅源摘要，再逐条 getRssSources 取 json */
+    private const val QREAD_PATH_GET_RSS_SOURCES_BULK = "/api/%d/getRssSourcess"
     private const val QREAD_PATH_GET_RSS_SOURCE = "/api/%d/getRssSources"
     private const val PARAM_ACCESS_TOKEN = "accessToken"
     private const val PARAM_VERSION = "version"
     private const val PARAM_NAME = "name"
-    private const val PARAM_MD5 = "md5"
-    private const val PARAM_PAGE = "page"
     private const val PARAM_URL = "url"
     private const val PARAM_POS = "pos"
     private const val PARAM_TITLE = "title"
@@ -63,8 +61,6 @@ object RemoteProgressBridge {
     private const val QREAD_ERROR_MSG = "errorMsg"
     private const val QREAD_DATA = "data"
     private const val QREAD_BOOK_URL = "bookUrl"
-    private const val QREAD_MD5 = "md5"
-    private const val QREAD_PAGE = "page"
     private const val QREAD_BOOK_SOURCE_URL = "bookSourceUrl"
     private const val QREAD_SOURCE_URL = "sourceUrl"
     private const val QREAD_SOURCE_GROUP = "sourceGroup"
@@ -119,9 +115,9 @@ object RemoteProgressBridge {
         }
     }
 
-    suspend fun syncBookSourcesFromQRead(): Int {
+    suspend fun syncBookSourcesFromQRead(accessToken: String? = null): Int {
         val baseUrl = AppConfig.qreadBaseUrl.trimEnd('/')
-        val token = AppConfig.qreadToken
+        val token = accessToken?.trim()?.takeIf { it.isNotBlank() } ?: AppConfig.qreadToken
         if (baseUrl.isBlank() || token.isBlank()) return 0
         return try {
             val sourceJson = fetchBookSourceJsonQRead(baseUrl, token)
@@ -137,9 +133,9 @@ object RemoteProgressBridge {
         }
     }
 
-    suspend fun syncRssSourcesFromQRead(): Int {
+    suspend fun syncRssSourcesFromQRead(accessToken: String? = null): Int {
         val baseUrl = AppConfig.qreadBaseUrl.trimEnd('/')
-        val token = AppConfig.qreadToken
+        val token = accessToken?.trim()?.takeIf { it.isNotBlank() } ?: AppConfig.qreadToken
         if (baseUrl.isBlank() || token.isBlank()) return 0
         return try {
             val summaries = fetchRssSourceSummariesQRead(baseUrl, token)
@@ -301,8 +297,7 @@ object RemoteProgressBridge {
 
     private suspend fun fetchBookSourceJsonQRead(baseUrl: String, token: String): String {
         QREAD_API_VERSIONS.forEach { version ->
-            val meta = fetchBookSourceMetaQRead(baseUrl, token, version) ?: return@forEach
-            val ids = fetchBookSourceIdsQRead(baseUrl, token, version, meta.second, meta.first)
+            val ids = fetchBookSourceIdsFromReadApi(baseUrl, token, version)
             if (ids.isEmpty()) return@forEach
             val payload = fetchBookSourceJsonPayloadQRead(baseUrl, token, version, ids)
             if (!payload.isNullOrBlank()) return payload
@@ -310,79 +305,45 @@ object RemoteProgressBridge {
         return ""
     }
 
-    private suspend fun fetchBookSourceMetaQRead(
+    /**
+     * 使用 [ReadController.getBookSources] 拉取书源 URL 列表（与轻阅读一致），
+     * 避免依赖 [SourceController.getBookSourcesNew] 等分页缓存接口（服务端曾返回 false）。
+     */
+    private fun fetchBookSourceIdsFromReadApi(
         baseUrl: String,
         token: String,
         version: Int
-    ): Pair<Int, String>? {
-        val requestUrl = "$baseUrl${QREAD_PATH_GET_BOOK_SOURCES_PAGE.format(version)}".toHttpUrl()
+    ): List<String> {
+        val requestUrl = "$baseUrl${QREAD_PATH_GET_BOOK_SOURCES_LIST.format(version)}".toHttpUrl()
             .newBuilder()
             .addQueryParameter(PARAM_ACCESS_TOKEN, token)
+            .addQueryParameter("isall", "1")
             .build()
         val request = Request.Builder().url(requestUrl).get().build()
-        okHttpClient.newCall(request).execute().use { response ->
+        return okHttpClient.newCall(request).execute().use { response ->
             if (!response.isSuccessful) {
-                AppLog.put("$LOG_QREAD_PREFIX getBookSourcesPage HTTP ${response.code}, v=$version")
-                return null
+                AppLog.put("$LOG_QREAD_PREFIX getBookSources HTTP ${response.code}, v=$version")
+                return@use emptyList()
             }
             val body = response.body.string()
-            val root = runCatching { JSONObject(body) }.getOrNull() ?: return null
+            val root = runCatching { JSONObject(body) }.getOrNull() ?: return@use emptyList()
             if (!root.optBoolean(QREAD_IS_SUCCESS, false)) {
                 AppLog.put(
-                    "$LOG_QREAD_PREFIX getBookSourcesPage isSuccess=false, v=$version, error=${
+                    "$LOG_QREAD_PREFIX getBookSources isSuccess=false, v=$version, error=${
                         root.optString(QREAD_ERROR_MSG)
                     }"
                 )
-                return null
+                return@use emptyList()
             }
-            val data = root.optJSONObject(QREAD_DATA) ?: return null
-            val page = data.optInt(QREAD_PAGE, 0)
-            val md5 = data.optString(QREAD_MD5).orEmpty()
-            if (page <= 0 || md5.isBlank()) return null
-            return page to md5
-        }
-    }
-
-    private suspend fun fetchBookSourceIdsQRead(
-        baseUrl: String,
-        token: String,
-        version: Int,
-        md5: String,
-        pageCount: Int
-    ): List<String> {
-        val ids = linkedSetOf<String>()
-        for (page in 1..pageCount) {
-            val requestUrl = "$baseUrl${QREAD_PATH_GET_BOOK_SOURCES_NEW.format(version)}".toHttpUrl()
-                .newBuilder()
-                .addQueryParameter(PARAM_ACCESS_TOKEN, token)
-                .addQueryParameter(PARAM_MD5, md5)
-                .addQueryParameter(PARAM_PAGE, page.toString())
-                .build()
-            val request = Request.Builder().url(requestUrl).get().build()
-            okHttpClient.newCall(request).execute().use { response ->
-                if (!response.isSuccessful) {
-                    AppLog.put("$LOG_QREAD_PREFIX getBookSourcesNew HTTP ${response.code}, v=$version, page=$page")
-                    return@use
-                }
-                val body = response.body.string()
-                val root = runCatching { JSONObject(body) }.getOrNull() ?: return@use
-                if (!root.optBoolean(QREAD_IS_SUCCESS, false)) {
-                    AppLog.put(
-                        "$LOG_QREAD_PREFIX getBookSourcesNew isSuccess=false, v=$version, page=$page, error=${
-                            root.optString(QREAD_ERROR_MSG)
-                        }"
-                    )
-                    return@use
-                }
-                val data = root.optJSONArray(QREAD_DATA) ?: return@use
-                for (i in 0 until data.length()) {
-                    val item = data.optJSONObject(i) ?: continue
-                    val id = item.optString(QREAD_BOOK_SOURCE_URL).orEmpty()
-                    if (id.isNotBlank()) ids.add(id)
-                }
+            val data = root.optJSONArray(QREAD_DATA) ?: return@use emptyList()
+            val ids = linkedSetOf<String>()
+            for (i in 0 until data.length()) {
+                val item = data.optJSONObject(i) ?: continue
+                val id = item.optString(QREAD_BOOK_SOURCE_URL).orEmpty()
+                if (id.isNotBlank()) ids.add(id)
             }
+            ids.toList()
         }
-        return ids.toList()
     }
 
     private suspend fun fetchBookSourceJsonPayloadQRead(
@@ -418,30 +379,52 @@ object RemoteProgressBridge {
         }
     }
 
-    private suspend fun fetchRssSourceSummariesQRead(
+    /**
+     * 使用 [RssController.getRssSourcess] 一次拉全量摘要（与轻阅读一致），
+     * 避免 [getRssSourcessNew] 分页缓存未实现的问题。
+     */
+    private fun fetchRssSourceSummariesQRead(
         baseUrl: String,
         token: String
     ): List<QReadRssSourceSummary> {
         QREAD_API_VERSIONS.forEach { version ->
-            val meta = fetchPagedMetaQRead(
-                baseUrl = baseUrl,
-                token = token,
-                pathTemplate = QREAD_PATH_GET_RSS_SOURCES_PAGE,
-                requestName = "getRssSourcessPage",
-                version = version
-            ) ?: return@forEach
-            val summaries = fetchPagedSourceSummariesQRead(
-                baseUrl = baseUrl,
-                token = token,
-                version = version,
-                pathTemplate = QREAD_PATH_GET_RSS_SOURCES_NEW,
-                requestName = "getRssSourcessNew",
-                md5 = meta.second,
-                pageCount = meta.first,
-                idField = QREAD_SOURCE_URL,
-                groupField = QREAD_SOURCE_GROUP,
-                enabledField = QREAD_ENABLED
-            )
+            val requestUrl = "$baseUrl${QREAD_PATH_GET_RSS_SOURCES_BULK.format(version)}".toHttpUrl()
+                .newBuilder()
+                .addQueryParameter(PARAM_ACCESS_TOKEN, token)
+                .build()
+            val request = Request.Builder().url(requestUrl).get().build()
+            val summaries = okHttpClient.newCall(request).execute().use { response ->
+                if (!response.isSuccessful) {
+                    AppLog.put("$LOG_QREAD_PREFIX getRssSourcess HTTP ${response.code}, v=$version")
+                    return@use emptyList()
+                }
+                val body = response.body.string()
+                val root = runCatching { JSONObject(body) }.getOrNull() ?: return@use emptyList()
+                if (!root.optBoolean(QREAD_IS_SUCCESS, false)) {
+                    AppLog.put(
+                        "$LOG_QREAD_PREFIX getRssSourcess isSuccess=false, v=$version, error=${
+                            root.optString(QREAD_ERROR_MSG)
+                        }"
+                    )
+                    return@use emptyList()
+                }
+                val data = root.optJSONObject(QREAD_DATA) ?: return@use emptyList()
+                val sources = data.optJSONArray("sources") ?: return@use emptyList()
+                val list = mutableListOf<QReadRssSourceSummary>()
+                for (i in 0 until sources.length()) {
+                    val item = sources.optJSONObject(i) ?: continue
+                    val sourceUrl = item.optString(QREAD_SOURCE_URL).orEmpty()
+                    if (sourceUrl.isBlank()) continue
+                    list.add(
+                        QReadRssSourceSummary(
+                            sourceUrl = sourceUrl,
+                            sourceGroup = item.optString(QREAD_SOURCE_GROUP).ifBlank { null },
+                            enabled = item.optBoolean(QREAD_ENABLED, true)
+                        )
+                    )
+                }
+                list
+            }
             if (summaries.isNotEmpty()) return summaries
         }
         return emptyList()
@@ -482,93 +465,6 @@ object RemoteProgressBridge {
             }
         }
         return null
-    }
-
-    private suspend fun fetchPagedMetaQRead(
-        baseUrl: String,
-        token: String,
-        pathTemplate: String,
-        requestName: String,
-        version: Int
-    ): Pair<Int, String>? {
-        val requestUrl = "$baseUrl${pathTemplate.format(version)}".toHttpUrl()
-            .newBuilder()
-            .addQueryParameter(PARAM_ACCESS_TOKEN, token)
-            .build()
-        val request = Request.Builder().url(requestUrl).get().build()
-        okHttpClient.newCall(request).execute().use { response ->
-            if (!response.isSuccessful) {
-                AppLog.put("$LOG_QREAD_PREFIX $requestName HTTP ${response.code}, v=$version")
-                return null
-            }
-            val body = response.body.string()
-            val root = runCatching { JSONObject(body) }.getOrNull() ?: return null
-            if (!root.optBoolean(QREAD_IS_SUCCESS, false)) {
-                AppLog.put(
-                    "$LOG_QREAD_PREFIX $requestName isSuccess=false, v=$version, error=${
-                        root.optString(QREAD_ERROR_MSG)
-                    }"
-                )
-                return null
-            }
-            val data = root.optJSONObject(QREAD_DATA) ?: return null
-            val page = data.optInt(QREAD_PAGE, 0)
-            val md5 = data.optString(QREAD_MD5).orEmpty()
-            if (page <= 0 || md5.isBlank()) return null
-            return page to md5
-        }
-    }
-
-    private suspend fun fetchPagedSourceSummariesQRead(
-        baseUrl: String,
-        token: String,
-        version: Int,
-        pathTemplate: String,
-        requestName: String,
-        md5: String,
-        pageCount: Int,
-        idField: String,
-        groupField: String,
-        enabledField: String
-    ): List<QReadRssSourceSummary> {
-        val summaries = linkedMapOf<String, QReadRssSourceSummary>()
-        for (page in 1..pageCount) {
-            val requestUrl = "$baseUrl${pathTemplate.format(version)}".toHttpUrl()
-                .newBuilder()
-                .addQueryParameter(PARAM_ACCESS_TOKEN, token)
-                .addQueryParameter(PARAM_MD5, md5)
-                .addQueryParameter(PARAM_PAGE, page.toString())
-                .build()
-            val request = Request.Builder().url(requestUrl).get().build()
-            okHttpClient.newCall(request).execute().use { response ->
-                if (!response.isSuccessful) {
-                    AppLog.put("$LOG_QREAD_PREFIX $requestName HTTP ${response.code}, v=$version, page=$page")
-                    return@use
-                }
-                val body = response.body.string()
-                val root = runCatching { JSONObject(body) }.getOrNull() ?: return@use
-                if (!root.optBoolean(QREAD_IS_SUCCESS, false)) {
-                    AppLog.put(
-                        "$LOG_QREAD_PREFIX $requestName isSuccess=false, v=$version, page=$page, error=${
-                            root.optString(QREAD_ERROR_MSG)
-                        }"
-                    )
-                    return@use
-                }
-                val data = root.optJSONArray(QREAD_DATA) ?: return@use
-                for (i in 0 until data.length()) {
-                    val item = data.optJSONObject(i) ?: continue
-                    val sourceUrl = item.optString(idField).orEmpty()
-                    if (sourceUrl.isBlank()) continue
-                    summaries[sourceUrl] = QReadRssSourceSummary(
-                        sourceUrl = sourceUrl,
-                        sourceGroup = item.optString(groupField).ifBlank { null },
-                        enabled = item.optBoolean(enabledField, true)
-                    )
-                }
-            }
-        }
-        return summaries.values.toList()
     }
 
     private suspend fun getBookProgressQRead(book: Book): BookProgress? {
@@ -636,7 +532,8 @@ object RemoteProgressBridge {
                             durChapterIndex = item.optInt(QREAD_DUR_CHAPTER_INDEX, 0),
                             durChapterPos = item.optDouble(QREAD_DUR_CHAPTER_POS, 0.0).toInt(),
                             durChapterTime = item.optLong(QREAD_DUR_CHAPTER_TIME, 0L),
-                            durChapterTitle = item.optString(QREAD_DUR_CHAPTER_TITLE).ifBlank { null }
+                            durChapterTitle = item.optString(QREAD_DUR_CHAPTER_TITLE).ifBlank { null },
+                            sourceJsonForShelf = item.toString()
                         )
                     )
                 }
@@ -652,28 +549,35 @@ object RemoteProgressBridge {
         if (baseUrl.isBlank() || token.isBlank()) return
         val progressList = fetchBookProgressListQRead(baseUrl, token)
         if (progressList.isEmpty()) return
-        val localBooks = appDb.bookDao.all
-        localBooks.forEach { book ->
-            val progress = progressList.firstOrNull {
-                !it.bookUrl.isNullOrBlank() && it.bookUrl == book.bookUrl
-            }?.toBookProgress()
-                ?: progressList.firstOrNull {
-                    it.name == book.name && it.author == book.author
-                }?.toBookProgress()
-                ?: return@forEach
-            if (progress.durChapterIndex > book.durChapterIndex ||
-                (progress.durChapterIndex == book.durChapterIndex &&
-                    progress.durChapterPos > book.durChapterPos)
-            ) {
-                book.durChapterIndex = progress.durChapterIndex
-                book.durChapterPos = progress.durChapterPos
-                if (!progress.durChapterTitle.isNullOrBlank()) {
-                    book.durChapterTitle = progress.durChapterTitle
+
+        progressList.forEach { payload ->
+            val progress = payload.toBookProgress()
+            val bookUrl = payload.bookUrl?.trim().orEmpty()
+            val existing = when {
+                bookUrl.isNotBlank() -> appDb.bookDao.getBook(bookUrl)
+                else -> null
+            } ?: appDb.bookDao.getBook(payload.name, payload.author)
+
+            if (existing != null) {
+                if (progress.durChapterIndex > existing.durChapterIndex ||
+                    (progress.durChapterIndex == existing.durChapterIndex &&
+                        progress.durChapterPos > existing.durChapterPos)
+                ) {
+                    existing.durChapterIndex = progress.durChapterIndex
+                    existing.durChapterPos = progress.durChapterPos
+                    if (!progress.durChapterTitle.isNullOrBlank()) {
+                        existing.durChapterTitle = progress.durChapterTitle
+                    }
+                    if (progress.durChapterTime > 0L) {
+                        existing.durChapterTime = progress.durChapterTime
+                    }
+                    appDb.bookDao.update(existing)
                 }
-                if (progress.durChapterTime > 0L) {
-                    book.durChapterTime = progress.durChapterTime
+            } else {
+                val newBook = payload.toShelfBook() ?: return@forEach
+                if (appDb.bookDao.getBook(newBook.bookUrl) == null) {
+                    appDb.bookDao.insert(newBook)
                 }
-                appDb.bookDao.update(book)
             }
         }
     }
@@ -692,7 +596,8 @@ private data class QReadBookProgressPayload(
     val durChapterIndex: Int,
     val durChapterPos: Int,
     val durChapterTime: Long,
-    val durChapterTitle: String?
+    val durChapterTitle: String?,
+    val sourceJsonForShelf: String = ""
 ) {
     fun toBookProgress(): BookProgress {
         return BookProgress(
@@ -703,5 +608,18 @@ private data class QReadBookProgressPayload(
             durChapterTime = durChapterTime,
             durChapterTitle = durChapterTitle
         )
+    }
+
+    /** 将云端 getBookshelf 单条 JSON 还原为本地书架 [Book]，用于空设备首次下拉同步 */
+    fun toShelfBook(): Book? {
+        val url = bookUrl?.trim().orEmpty()
+        if (url.isBlank() || sourceJsonForShelf.isBlank()) return null
+        val book = GSON.fromJsonObject<Book>(sourceJsonForShelf).getOrNull()?.takeIf { it.bookUrl.isNotBlank() }
+            ?: return null
+        book.durChapterIndex = durChapterIndex
+        book.durChapterPos = durChapterPos
+        if (durChapterTime > 0L) book.durChapterTime = durChapterTime
+        if (!durChapterTitle.isNullOrBlank()) book.durChapterTitle = durChapterTitle
+        return book
     }
 }

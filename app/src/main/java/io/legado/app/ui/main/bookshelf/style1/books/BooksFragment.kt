@@ -114,6 +114,9 @@ class BooksFragment() : BaseFragment(R.layout.fragment_books),
             binding.refreshLayout.isRefreshing = false
             viewLifecycleOwner.lifecycleScope.launch {
                 RemoteProgressBridge.syncQReadSourcesIfEnabled()
+                if (AppConfig.remoteSyncMode.equals("qread", true) && AppConfig.syncBookProgress) {
+                    RemoteProgressBridge.downloadAllBookProgress()
+                }
             }
             activityViewModel.upToc(booksAdapter.getItems(), onlyUpdateRead)
         }

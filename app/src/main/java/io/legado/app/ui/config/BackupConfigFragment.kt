@@ -32,6 +32,7 @@ import io.legado.app.help.coroutine.Coroutine
 import io.legado.app.help.storage.Backup
 import io.legado.app.help.storage.BackupConfig
 import io.legado.app.help.storage.ImportOldData
+import io.legado.app.help.remote.RemoteProgressBridge
 import io.legado.app.help.storage.Restore
 import io.legado.app.lib.dialogs.alert
 import io.legado.app.lib.dialogs.selector
@@ -315,15 +316,16 @@ class BackupConfigFragment : PreferenceFragment(),
             runCatching {
                 requestQReadToken(baseUrl, username, password, inviteCode)
             }.mapCatching { token ->
+                // 同步必须使用本轮登录拿到的 token；prefs 中的 qreadToken 要等 onSuccess 才写入，否则会一直是 0
                 val syncedBookSourceCount = if (token.isNullOrBlank()) {
                     0
                 } else {
-                    io.legado.app.help.remote.RemoteProgressBridge.syncBookSourcesFromQRead()
+                    RemoteProgressBridge.syncBookSourcesFromQRead(token)
                 }
                 val syncedRssSourceCount = if (token.isNullOrBlank()) {
                     0
                 } else {
-                    io.legado.app.help.remote.RemoteProgressBridge.syncRssSourcesFromQRead()
+                    RemoteProgressBridge.syncRssSourcesFromQRead(token)
                 }
                 Triple(token, syncedBookSourceCount, syncedRssSourceCount)
             }.onSuccess { (token, syncedBookSourceCount, syncedRssSourceCount) ->
@@ -334,6 +336,13 @@ class BackupConfigFragment : PreferenceFragment(),
                     } else {
                         appCtx.putPrefString(qreadToken, token)
                         upPreferenceSummary(qreadToken, token)
+                        lifecycleScope.launch(IO) {
+                            if (AppConfig.syncBookProgress &&
+                                AppConfig.remoteSyncMode.equals("qread", true)
+                            ) {
+                                RemoteProgressBridge.downloadAllBookProgress()
+                            }
+                        }
                         appCtx.toastOnUi(
                             getString(
                                 R.string.qread_login_and_sync_success,

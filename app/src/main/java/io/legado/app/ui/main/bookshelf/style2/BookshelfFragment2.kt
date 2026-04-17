@@ -91,6 +91,9 @@ class BookshelfFragment2() : BaseBookshelfFragment(R.layout.fragment_bookshelf2)
             binding.refreshLayout.isRefreshing = false
             viewLifecycleOwner.lifecycleScope.launch {
                 RemoteProgressBridge.syncQReadSourcesIfEnabled()
+                if (AppConfig.remoteSyncMode.equals("qread", true) && AppConfig.syncBookProgress) {
+                    RemoteProgressBridge.downloadAllBookProgress()
+                }
             }
             activityViewModel.upToc(books, onlyUpdateRead)
         }
