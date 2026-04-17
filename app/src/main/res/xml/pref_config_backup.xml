@@ -3,6 +3,55 @@
     xmlns:app="http://schemas.android.com/apk/res-auto">
 
     <io.legado.app.lib.prefs.PreferenceCategory
+        android:title="@string/remote_sync_set"
+        app:allowDividerAbove="false"
+        app:allowDividerBelow="false"
+        app:iconSpaceReserved="false"
+        app:layout="@layout/view_preference_category">
+
+        <io.legado.app.lib.prefs.NameListPreference
+            android:defaultValue="webdav"
+            android:entries="@array/remote_sync_mode_entries"
+            android:entryValues="@array/remote_sync_mode_values"
+            android:key="remoteSyncMode"
+            android:summary="@string/remote_sync_mode_s"
+            android:title="@string/remote_sync_mode_t"
+            app:iconSpaceReserved="false" />
+
+        <io.legado.app.lib.prefs.SwitchPreference
+            android:defaultValue="true"
+            android:key="syncBookProgress"
+            android:summary="@string/sync_book_progress_s"
+            android:title="@string/sync_book_progress_t"
+            app:allowDividerAbove="false"
+            app:allowDividerBelow="false"
+            app:iconSpaceReserved="false" />
+
+        <io.legado.app.lib.prefs.SwitchPreference
+            android:defaultValue="false"
+            android:dependency="syncBookProgress"
+            android:key="syncBookProgressPlus"
+            android:summary="@string/sync_book_progress_plus_s"
+            android:title="@string/sync_book_progress_plus_t"
+            app:allowDividerAbove="false"
+            app:allowDividerBelow="false"
+            app:iconSpaceReserved="false" />
+
+        <io.legado.app.lib.prefs.EditTextPreference
+            android:key="qreadBaseUrl"
+            android:summary="@string/qread_base_url_s"
+            android:title="@string/qread_base_url_t"
+            app:iconSpaceReserved="false" />
+
+        <io.legado.app.lib.prefs.EditTextPreference
+            android:key="qreadToken"
+            android:summary="@string/qread_token_s"
+            android:title="@string/qread_token_t"
+            app:iconSpaceReserved="false" />
+
+    </io.legado.app.lib.prefs.PreferenceCategory>
+
+    <io.legado.app.lib.prefs.PreferenceCategory
         android:title="@string/web_dav_set"
         app:allowDividerAbove="false"
         app:allowDividerBelow="false"
@@ -39,55 +88,6 @@
             android:title="@string/webdav_device_name"
             app:allowDividerAbove="false"
             app:allowDividerBelow="false"
-            app:iconSpaceReserved="false" />
-
-        <io.legado.app.lib.prefs.SwitchPreference
-            android:defaultValue="true"
-            android:key="syncBookProgress"
-            android:summary="@string/sync_book_progress_s"
-            android:title="@string/sync_book_progress_t"
-            app:allowDividerAbove="false"
-            app:allowDividerBelow="false"
-            app:iconSpaceReserved="false" />
-
-        <io.legado.app.lib.prefs.SwitchPreference
-            android:defaultValue="false"
-            android:dependency="syncBookProgress"
-            android:key="syncBookProgressPlus"
-            android:summary="@string/sync_book_progress_plus_s"
-            android:title="@string/sync_book_progress_plus_t"
-            app:allowDividerAbove="false"
-            app:allowDividerBelow="false"
-            app:iconSpaceReserved="false" />
-
-    </io.legado.app.lib.prefs.PreferenceCategory>
-
-    <io.legado.app.lib.prefs.PreferenceCategory
-        android:title="@string/remote_sync_set"
-        app:allowDividerAbove="false"
-        app:allowDividerBelow="false"
-        app:iconSpaceReserved="false"
-        app:layout="@layout/view_preference_category">
-
-        <io.legado.app.lib.prefs.ListPreference
-            android:defaultValue="webdav"
-            android:entries="@array/remote_sync_mode_entries"
-            android:entryValues="@array/remote_sync_mode_values"
-            android:key="remoteSyncMode"
-            android:summary="@string/remote_sync_mode_s"
-            android:title="@string/remote_sync_mode_t"
-            app:iconSpaceReserved="false" />
-
-        <io.legado.app.lib.prefs.EditTextPreference
-            android:key="qreadBaseUrl"
-            android:summary="@string/qread_base_url_s"
-            android:title="@string/qread_base_url_t"
-            app:iconSpaceReserved="false" />
-
-        <io.legado.app.lib.prefs.EditTextPreference
-            android:key="qreadToken"
-            android:summary="@string/qread_token_s"
-            android:title="@string/qread_token_t"
             app:iconSpaceReserved="false" />
 
     </io.legado.app.lib.prefs.PreferenceCategory>

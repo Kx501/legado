@@ -185,7 +185,6 @@
 	</string-array>
 
 	<string-array name="remote_sync_mode_entries">
-		<item>@string/local</item>
 		<item>WebDav</item>
 		<item>QRead</item>
 	</string-array>

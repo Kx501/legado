@@ -14,6 +14,9 @@ import androidx.lifecycle.lifecycleScope
 import androidx.preference.EditTextPreference
 import androidx.preference.ListPreference
 import androidx.preference.Preference
+import io.legado.app.constant.PreferKey.qreadBaseUrl
+import io.legado.app.constant.PreferKey.qreadToken
+import io.legado.app.constant.PreferKey.remoteSyncMode
 import io.legado.app.R
 import io.legado.app.constant.AppLog
 import io.legado.app.constant.PreferKey
@@ -115,7 +118,7 @@ class BackupConfigFragment : PreferenceFragment(),
                 editText.setSelection(editText.text.length)
             }
         }
-        findPreference<EditTextPreference>(PreferKey.qreadToken)?.let {
+        findPreference<EditTextPreference>(qreadToken)?.let {
             it.setOnBindEditTextListener { editText ->
                 editText.inputType =
                     InputType.TYPE_TEXT_VARIATION_PASSWORD or InputType.TYPE_CLASS_TEXT
@@ -139,9 +142,9 @@ class BackupConfigFragment : PreferenceFragment(),
         upPreferenceSummary(PreferKey.webDavPassword, getPrefString(PreferKey.webDavPassword))
         upPreferenceSummary(PreferKey.webDavDir, AppConfig.webDavDir)
         upPreferenceSummary(PreferKey.webDavDeviceName, AppConfig.webDavDeviceName)
-        upPreferenceSummary(PreferKey.remoteSyncMode, AppConfig.remoteSyncMode)
-        upPreferenceSummary(PreferKey.qreadBaseUrl, AppConfig.qreadBaseUrl)
-        upPreferenceSummary(PreferKey.qreadToken, AppConfig.qreadToken)
+        upPreferenceSummary(remoteSyncMode, getPrefString(remoteSyncMode))
+        upPreferenceSummary(qreadBaseUrl, getPrefString(qreadBaseUrl))
+        upPreferenceSummary(qreadToken, getPrefString(qreadToken))
         upPreferenceSummary(PreferKey.backupPath, getPrefString(PreferKey.backupPath))
         findPreference<io.legado.app.lib.prefs.Preference>("web_dav_restore")
             ?.onLongClick {
@@ -189,15 +192,15 @@ class BackupConfigFragment : PreferenceFragment(),
             PreferKey.webDavUrl,
             PreferKey.webDavAccount,
             PreferKey.webDavPassword,
-            PreferKey.webDavDir -> listView.post {
+            PreferKey.webDavDir,
+            remoteSyncMode,
+            qreadBaseUrl,
+            qreadToken -> listView.post {
                 upPreferenceSummary(key, appCtx.getPrefString(key))
                 viewModel.upWebDavConfig()
             }
 
             PreferKey.webDavDeviceName -> upPreferenceSummary(key, getPrefString(key))
-            PreferKey.remoteSyncMode,
-            PreferKey.qreadBaseUrl,
-            PreferKey.qreadToken -> upPreferenceSummary(key, getPrefString(key))
         }
     }
 
@@ -225,7 +228,7 @@ class BackupConfigFragment : PreferenceFragment(),
                     preference.summary = "*".repeat(value.length)
                 }
 
-            PreferKey.qreadToken ->
+            qreadToken ->
                 if (value.isNullOrEmpty()) {
                     preference.summary = getString(R.string.qread_token_s)
                 } else {
