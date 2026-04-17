@@ -114,6 +114,7 @@
     <string name="ps_auto_download">Download the latest chapters automatically  when updating books</string>
     <string name="backup_restore">Backup and restore</string>
     <string name="web_dav_set">WebDav settings</string>
+    <string name="remote_sync_set">Remote sync settings</string>
     <string name="web_dav_set_import_old">WebDav settings/Import legacy data</string>
     <string name="backup">Backup</string>
     <string name="restore">Restore</string>
@@ -831,6 +832,12 @@
     <string name="sync_book_progress_s">Synchronize reading progress when entering / exiting the reading interface</string>
     <string name="sync_book_progress_plus_t">Sync Enhancement</string>
     <string name="sync_book_progress_plus_s">Sync cloud progress when re-entering the page (screen off, returning from background, etc.) or when the network becomes available. You will be prompted before syncing new progress.</string>
+    <string name="remote_sync_mode_t">Remote sync mode</string>
+    <string name="remote_sync_mode_s">Choose local/WebDav/QRead</string>
+    <string name="qread_base_url_t">QRead server URL</string>
+    <string name="qread_base_url_s">Example: https://qread.example.com</string>
+    <string name="qread_token_t">QRead token</string>
+    <string name="qread_token_s">Enter access token from QRead backend</string>
     <string name="sync_book_progress_success">Sync progress success</string>
     <string name="create_bookmark_error">Failed to create bookmark</string>
     <string name="single_url">Single URL</string>

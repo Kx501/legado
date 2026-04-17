@@ -184,6 +184,12 @@
 		<item>@string/beta_releaseS_version</item>
 	</string-array>
 
+	<string-array name="remote_sync_mode_entries">
+		<item>@string/local</item>
+		<item>WebDav</item>
+		<item>QRead</item>
+	</string-array>
+
 	<string-array name="default_home_page_value">
 		<item>bookshelf</item>
 		<item>explore</item>

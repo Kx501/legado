@@ -115,6 +115,13 @@ class BackupConfigFragment : PreferenceFragment(),
                 editText.setSelection(editText.text.length)
             }
         }
+        findPreference<EditTextPreference>(PreferKey.qreadToken)?.let {
+            it.setOnBindEditTextListener { editText ->
+                editText.inputType =
+                    InputType.TYPE_TEXT_VARIATION_PASSWORD or InputType.TYPE_CLASS_TEXT
+                editText.setSelection(editText.text.length)
+            }
+        }
         findPreference<EditTextPreference>(PreferKey.webDavDir)?.let {
             it.setOnBindEditTextListener { editText ->
                 editText.text = AppConfig.webDavDir?.toEditable()
@@ -132,6 +139,9 @@ class BackupConfigFragment : PreferenceFragment(),
         upPreferenceSummary(PreferKey.webDavPassword, getPrefString(PreferKey.webDavPassword))
         upPreferenceSummary(PreferKey.webDavDir, AppConfig.webDavDir)
         upPreferenceSummary(PreferKey.webDavDeviceName, AppConfig.webDavDeviceName)
+        upPreferenceSummary(PreferKey.remoteSyncMode, AppConfig.remoteSyncMode)
+        upPreferenceSummary(PreferKey.qreadBaseUrl, AppConfig.qreadBaseUrl)
+        upPreferenceSummary(PreferKey.qreadToken, AppConfig.qreadToken)
         upPreferenceSummary(PreferKey.backupPath, getPrefString(PreferKey.backupPath))
         findPreference<io.legado.app.lib.prefs.Preference>("web_dav_restore")
             ?.onLongClick {
@@ -185,6 +195,9 @@ class BackupConfigFragment : PreferenceFragment(),
             }
 
             PreferKey.webDavDeviceName -> upPreferenceSummary(key, getPrefString(key))
+            PreferKey.remoteSyncMode,
+            PreferKey.qreadBaseUrl,
+            PreferKey.qreadToken -> upPreferenceSummary(key, getPrefString(key))
         }
     }
 
@@ -208,6 +221,13 @@ class BackupConfigFragment : PreferenceFragment(),
             PreferKey.webDavPassword ->
                 if (value.isNullOrEmpty()) {
                     preference.summary = getString(R.string.web_dav_pw_s)
+                } else {
+                    preference.summary = "*".repeat(value.length)
+                }
+
+            PreferKey.qreadToken ->
+                if (value.isNullOrEmpty()) {
+                    preference.summary = getString(R.string.qread_token_s)
                 } else {
                     preference.summary = "*".repeat(value.length)
                 }
