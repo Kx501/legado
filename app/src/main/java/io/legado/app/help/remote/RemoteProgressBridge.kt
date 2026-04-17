@@ -78,6 +78,7 @@ object RemoteProgressBridge {
     private const val QREAD_DUR_CHAPTER_TITLE = "durChapterTitle"
     private const val QREAD_CONTENT_TYPE_JSON = "application/json; charset=utf-8"
     private const val LOG_QREAD_PREFIX = "QRead请求失败"
+    private const val MODE_QREAD = "qread"
 
     suspend fun uploadBookProgress(
         book: Book,
@@ -160,6 +161,15 @@ object RemoteProgressBridge {
         }
     }
 
+    suspend fun syncQReadSourcesIfEnabled(): Pair<Int, Int> {
+        if (!AppConfig.remoteSyncMode.equals(MODE_QREAD, true)) {
+            return 0 to 0
+        }
+        val bookCount = syncBookSourcesFromQRead()
+        val rssCount = syncRssSourcesFromQRead()
+        return bookCount to rssCount
+    }
+
     private suspend fun uploadBookProgressQRead(
         progress: BookProgress,
         onSuccess: (() -> Unit)? = null
@@ -201,7 +211,7 @@ object RemoteProgressBridge {
                         AppLog.put("$LOG_QREAD_PREFIX saveBookProgress HTTP ${response.code}, v=$version")
                         return@use
                     }
-                    val payload = response.body?.string().orEmpty()
+                    val payload = response.body.string()
                     val json = runCatching { JSONObject(payload) }.getOrNull() ?: return@use
                     if (json.optBoolean(QREAD_IS_SUCCESS, false)) {
                         uploadOk = true
@@ -273,7 +283,7 @@ object RemoteProgressBridge {
                     AppLog.put("$LOG_QREAD_PREFIX saveBooks HTTP ${response.code}, v=$version")
                     return@use
                 }
-                val body = response.body?.string().orEmpty()
+                val body = response.body.string()
                 val root = runCatching { JSONObject(body) }.getOrNull() ?: return@use
                 if (root.optBoolean(QREAD_IS_SUCCESS, false)) {
                     return true
@@ -315,7 +325,7 @@ object RemoteProgressBridge {
                 AppLog.put("$LOG_QREAD_PREFIX getBookSourcesPage HTTP ${response.code}, v=$version")
                 return null
             }
-            val body = response.body?.string().orEmpty()
+            val body = response.body.string()
             val root = runCatching { JSONObject(body) }.getOrNull() ?: return null
             if (!root.optBoolean(QREAD_IS_SUCCESS, false)) {
                 AppLog.put(
@@ -354,7 +364,7 @@ object RemoteProgressBridge {
                     AppLog.put("$LOG_QREAD_PREFIX getBookSourcesNew HTTP ${response.code}, v=$version, page=$page")
                     return@use
                 }
-                val body = response.body?.string().orEmpty()
+                val body = response.body.string()
                 val root = runCatching { JSONObject(body) }.getOrNull() ?: return@use
                 if (!root.optBoolean(QREAD_IS_SUCCESS, false)) {
                     AppLog.put(
@@ -394,7 +404,7 @@ object RemoteProgressBridge {
                 AppLog.put("$LOG_QREAD_PREFIX getbookSourcejson HTTP ${response.code}, v=$version")
                 return null
             }
-            val body = response.body?.string().orEmpty()
+            val body = response.body.string()
             val root = runCatching { JSONObject(body) }.getOrNull() ?: return null
             if (!root.optBoolean(QREAD_IS_SUCCESS, false)) {
                 AppLog.put(
@@ -454,7 +464,7 @@ object RemoteProgressBridge {
                     AppLog.put("$LOG_QREAD_PREFIX getRssSources HTTP ${response.code}, v=$version")
                     return@use
                 }
-                val body = response.body?.string().orEmpty()
+                val body = response.body.string()
                 val root = runCatching { JSONObject(body) }.getOrNull() ?: return@use
                 if (!root.optBoolean(QREAD_IS_SUCCESS, false)) {
                     AppLog.put(
@@ -491,7 +501,7 @@ object RemoteProgressBridge {
                 AppLog.put("$LOG_QREAD_PREFIX $requestName HTTP ${response.code}, v=$version")
                 return null
             }
-            val body = response.body?.string().orEmpty()
+            val body = response.body.string()
             val root = runCatching { JSONObject(body) }.getOrNull() ?: return null
             if (!root.optBoolean(QREAD_IS_SUCCESS, false)) {
                 AppLog.put(
@@ -535,7 +545,7 @@ object RemoteProgressBridge {
                     AppLog.put("$LOG_QREAD_PREFIX $requestName HTTP ${response.code}, v=$version, page=$page")
                     return@use
                 }
-                val body = response.body?.string().orEmpty()
+                val body = response.body.string()
                 val root = runCatching { JSONObject(body) }.getOrNull() ?: return@use
                 if (!root.optBoolean(QREAD_IS_SUCCESS, false)) {
                     AppLog.put(
@@ -605,7 +615,7 @@ object RemoteProgressBridge {
                     AppLog.put("$LOG_QREAD_PREFIX getBookshelf HTTP ${response.code}, v=$version")
                     return@use
                 }
-                val body = response.body?.string().orEmpty()
+                val body = response.body.string()
                 val root = runCatching { JSONObject(body) }.getOrNull() ?: return@use
                 if (!root.optBoolean(QREAD_IS_SUCCESS, false)) {
                     val errorMsg = root.optString(QREAD_ERROR_MSG)

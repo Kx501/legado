@@ -24,6 +24,7 @@ import io.legado.app.data.entities.Book
 import io.legado.app.data.entities.BookGroup
 import io.legado.app.databinding.FragmentBooksBinding
 import io.legado.app.help.config.AppConfig
+import io.legado.app.help.remote.RemoteProgressBridge
 import io.legado.app.lib.theme.accentColor
 import io.legado.app.lib.theme.primaryColor
 import io.legado.app.ui.book.info.BookInfoActivity
@@ -111,6 +112,9 @@ class BooksFragment() : BaseFragment(R.layout.fragment_books),
         binding.refreshLayout.setColorSchemeColors(accentColor)
         binding.refreshLayout.setOnRefreshListener {
             binding.refreshLayout.isRefreshing = false
+            viewLifecycleOwner.lifecycleScope.launch {
+                RemoteProgressBridge.syncQReadSourcesIfEnabled()
+            }
             activityViewModel.upToc(booksAdapter.getItems(), onlyUpdateRead)
         }
         if (bookshelfLayout >= 2) {

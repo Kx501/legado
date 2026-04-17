@@ -139,6 +139,11 @@
         app:showAsAction="never" />
 
     <item
+        android:id="@+id/menu_sync_qread_sources"
+        android:title="@string/refresh_book_source"
+        app:showAsAction="never" />
+
+    <item
         android:id="@+id/menu_help"
         android:icon="@drawable/ic_help"
         android:title="@string/help"

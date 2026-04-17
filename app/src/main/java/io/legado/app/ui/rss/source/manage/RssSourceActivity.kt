@@ -18,6 +18,8 @@ import io.legado.app.data.entities.RssSource
 import io.legado.app.databinding.ActivityRssSourceBinding
 import io.legado.app.databinding.DialogEditTextBinding
 import io.legado.app.help.DirectLinkUpload
+import io.legado.app.help.config.AppConfig
+import io.legado.app.help.remote.RemoteProgressBridge
 import io.legado.app.lib.dialogs.alert
 import io.legado.app.lib.theme.primaryColor
 import io.legado.app.lib.theme.primaryTextColor
@@ -41,6 +43,7 @@ import io.legado.app.utils.showDialogFragment
 import io.legado.app.utils.showHelp
 import io.legado.app.utils.splitNotBlank
 import io.legado.app.utils.startActivity
+import io.legado.app.utils.toastOnUi
 import io.legado.app.utils.transaction
 import io.legado.app.utils.viewbindingdelegate.viewBinding
 import kotlinx.coroutines.Dispatchers.IO
@@ -58,6 +61,9 @@ class RssSourceActivity : VMBaseActivity<ActivityRssSourceBinding, RssSourceView
     PopupMenu.OnMenuItemClickListener,
     SelectActionBar.CallBack,
     RssSourceAdapter.CallBack {
+    companion object {
+        private const val MODE_QREAD = "qread"
+    }
 
     override val binding by viewBinding(ActivityRssSourceBinding::inflate)
     override val viewModel by viewModels<RssSourceViewModel>()
@@ -111,6 +117,8 @@ class RssSourceActivity : VMBaseActivity<ActivityRssSourceBinding, RssSourceView
 
     override fun onPrepareOptionsMenu(menu: Menu): Boolean {
         groupMenu = menu.findItem(R.id.menu_group)?.subMenu
+        menu.findItem(R.id.menu_sync_qread_sources)?.isVisible =
+            AppConfig.remoteSyncMode.equals(MODE_QREAD, true)
         upGroupMenu()
         return super.onPrepareOptionsMenu(menu)
     }
@@ -127,6 +135,10 @@ class RssSourceActivity : VMBaseActivity<ActivityRssSourceBinding, RssSourceView
             R.id.menu_import_qr -> qrCodeResult.launch()
             R.id.menu_group_manage -> showDialogFragment<GroupManageDialog>()
             R.id.menu_import_default -> viewModel.importDefault()
+            R.id.menu_sync_qread_sources -> lifecycleScope.launch {
+                val rssCount = RemoteProgressBridge.syncRssSourcesFromQRead()
+                toastOnUi(getString(R.string.qread_sync_rss_sources_result, rssCount))
+            }
             R.id.menu_enabled_group -> {
                 searchView.setQuery(getString(R.string.enabled), true)
             }

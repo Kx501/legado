@@ -334,12 +334,12 @@ class BackupConfigFragment : PreferenceFragment(),
                     } else {
                         appCtx.putPrefString(qreadToken, token)
                         upPreferenceSummary(qreadToken, token)
-                        appCtx.toastOnUi(R.string.qread_login_success)
                         appCtx.toastOnUi(
-                            getString(R.string.qread_source_sync_result, syncedBookSourceCount)
-                        )
-                        appCtx.toastOnUi(
-                            getString(R.string.qread_rss_source_sync_result, syncedRssSourceCount)
+                            getString(
+                                R.string.qread_login_and_sync_success,
+                                syncedBookSourceCount,
+                                syncedRssSourceCount
+                            )
                         )
                     }
                 }
@@ -381,7 +381,7 @@ class BackupConfigFragment : PreferenceFragment(),
                     .post(body)
                     .build()
                 io.legado.app.help.http.okHttpClient.newCall(request).execute().use { response ->
-                    val payload = response.body?.string().orEmpty()
+                    val payload = response.body.string()
                     if (!response.isSuccessful) {
                         error("HTTP ${response.code}")
                     }

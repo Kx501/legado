@@ -28,7 +28,9 @@ import io.legado.app.data.entities.BookSourcePart
 import io.legado.app.databinding.ActivityBookSourceBinding
 import io.legado.app.databinding.DialogEditTextBinding
 import io.legado.app.help.DirectLinkUpload
+import io.legado.app.help.config.AppConfig
 import io.legado.app.help.config.LocalConfig
+import io.legado.app.help.remote.RemoteProgressBridge
 import io.legado.app.lib.dialogs.alert
 import io.legado.app.lib.theme.primaryColor
 import io.legado.app.lib.theme.primaryTextColor
@@ -85,6 +87,9 @@ class BookSourceActivity : VMBaseActivity<ActivityBookSourceBinding, BookSourceV
     BookSourceAdapter.CallBack,
     SelectActionBar.CallBack,
     SearchView.OnQueryTextListener {
+    companion object {
+        private const val MODE_QREAD = "qread"
+    }
     override val binding by viewBinding(ActivityBookSourceBinding::inflate)
     override val viewModel by viewModels<BookSourceViewModel>()
     private val importRecordKey = "bookSourceRecordKey"
@@ -163,6 +168,8 @@ class BookSourceActivity : VMBaseActivity<ActivityBookSourceBinding, BookSourceV
 
     override fun onPrepareOptionsMenu(menu: Menu): Boolean {
         groupMenu = menu.findItem(R.id.menu_group).subMenu
+        menu.findItem(R.id.menu_sync_qread_sources)?.isVisible =
+            AppConfig.remoteSyncMode.equals(MODE_QREAD, true)
         val sortSubMenu = menu.findItem(R.id.action_sort).subMenu!!
         sortSubMenu.findItem(R.id.menu_sort_desc).isChecked = !sortAscending
         sortSubMenu.setGroupCheckable(R.id.menu_group_sort, true, true)
@@ -259,6 +266,11 @@ class BookSourceActivity : VMBaseActivity<ActivityBookSourceBinding, BookSourceV
                 groupSourcesByDomain = item.isChecked
                 adapter.showSourceHost = item.isChecked
                 upBookSource(searchView.query?.toString())
+            }
+
+            R.id.menu_sync_qread_sources -> lifecycleScope.launch {
+                val bookCount = RemoteProgressBridge.syncBookSourcesFromQRead()
+                toastOnUi(getString(R.string.qread_sync_book_sources_result, bookCount))
             }
 
             R.id.menu_help -> showHelp("SourceMBookHelp")

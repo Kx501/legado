@@ -854,8 +854,13 @@
     <string name="qread_login_invite_code_required">当前后端要求邀请码，请先填写邀请码</string>
     <string name="qread_login_token_empty">QRead 登录成功，但未返回 accessToken</string>
     <string name="qread_login_success">QRead 登录成功，Token 已更新</string>
-    <string name="qread_source_sync_result">QRead 书源同步完成，共 %1$d 条</string>
-    <string name="qread_rss_source_sync_result">QRead 订阅源同步完成，共 %1$d 条</string>
+    <string name="qread_login_and_sync_success">QRead 登录成功。书源：%1$d 条，订阅源：%2$d 条</string>
+    <string name="qread_sync_from_server">从 QRead 服务器同步</string>
+    <string name="refresh_book_source">刷新书源</string>
+    <string name="refresh_rss_source">刷新订阅源</string>
+    <string name="qread_sync_sources_result">QRead 同步完成。书源：%1$d 条，订阅源：%2$d 条</string>
+    <string name="qread_sync_book_sources_result">QRead 书源同步完成，共 %1$d 条</string>
+    <string name="qread_sync_rss_sources_result">QRead 订阅源同步完成，共 %1$d 条</string>
     <string name="qread_login_failed">QRead 登录失败\n%s</string>
     <string name="create_bookmark_error">创建书签失败</string>
     <string name="single_url">单 URL</string>
