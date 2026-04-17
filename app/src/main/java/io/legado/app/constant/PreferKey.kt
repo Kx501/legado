@@ -183,6 +183,8 @@ object PreferKey {
     const val autoCheckNewBackup = "autoCheckNewBackup"
     const val remoteSyncMode = "remoteSyncMode"
     const val qreadBaseUrl = "qreadBaseUrl"
+    const val qreadUsername = "qreadUsername"
+    const val qreadPassword = "qreadPassword"
     const val qreadToken = "qreadToken"
 
     const val dThemeName = "durThemeName"

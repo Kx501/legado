@@ -14,8 +14,11 @@ import androidx.lifecycle.lifecycleScope
 import androidx.preference.EditTextPreference
 import androidx.preference.ListPreference
 import androidx.preference.Preference
+import androidx.preference.PreferenceCategory
 import io.legado.app.constant.PreferKey.qreadBaseUrl
+import io.legado.app.constant.PreferKey.qreadPassword
 import io.legado.app.constant.PreferKey.qreadToken
+import io.legado.app.constant.PreferKey.qreadUsername
 import io.legado.app.constant.PreferKey.remoteSyncMode
 import io.legado.app.R
 import io.legado.app.constant.AppLog
@@ -44,6 +47,7 @@ import io.legado.app.utils.checkWrite
 import io.legado.app.utils.getPrefString
 import io.legado.app.utils.isContentScheme
 import io.legado.app.utils.launch
+import io.legado.app.utils.putPrefString
 import io.legado.app.utils.setEdgeEffectColor
 import io.legado.app.utils.showDialogFragment
 import io.legado.app.utils.showHelp
@@ -56,11 +60,20 @@ import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import okhttp3.FormBody
+import okhttp3.Request
+import org.json.JSONObject
 import splitties.init.appCtx
 
 class BackupConfigFragment : PreferenceFragment(),
     SharedPreferences.OnSharedPreferenceChangeListener,
     MenuProvider {
+    companion object {
+        private const val MODE_WEBDAV = "webdav"
+        private const val WEB_DAV_CONFIG_CATEGORY = "webDavConfigCategory"
+        private const val QREAD_CONFIG_CATEGORY = "qreadConfigCategory"
+        private val QREAD_API_VERSIONS = intArrayOf(5, 1)
+    }
 
     private val viewModel by activityViewModels<ConfigViewModel>()
     private val waitDialog by lazy { WaitDialog(requireContext()) }
@@ -125,6 +138,13 @@ class BackupConfigFragment : PreferenceFragment(),
                 editText.setSelection(editText.text.length)
             }
         }
+        findPreference<EditTextPreference>(qreadPassword)?.let {
+            it.setOnBindEditTextListener { editText ->
+                editText.inputType =
+                    InputType.TYPE_TEXT_VARIATION_PASSWORD or InputType.TYPE_CLASS_TEXT
+                editText.setSelection(editText.text.length)
+            }
+        }
         findPreference<EditTextPreference>(PreferKey.webDavDir)?.let {
             it.setOnBindEditTextListener { editText ->
                 editText.text = AppConfig.webDavDir?.toEditable()
@@ -144,8 +164,11 @@ class BackupConfigFragment : PreferenceFragment(),
         upPreferenceSummary(PreferKey.webDavDeviceName, AppConfig.webDavDeviceName)
         upPreferenceSummary(remoteSyncMode, getPrefString(remoteSyncMode))
         upPreferenceSummary(qreadBaseUrl, getPrefString(qreadBaseUrl))
+        upPreferenceSummary(qreadUsername, getPrefString(qreadUsername))
+        upPreferenceSummary(qreadPassword, getPrefString(qreadPassword))
         upPreferenceSummary(qreadToken, getPrefString(qreadToken))
         upPreferenceSummary(PreferKey.backupPath, getPrefString(PreferKey.backupPath))
+        updateConfigCategoryVisibility(getPrefString(remoteSyncMode))
         findPreference<io.legado.app.lib.prefs.Preference>("web_dav_restore")
             ?.onLongClick {
                 restoreFromLocal()
@@ -195,8 +218,13 @@ class BackupConfigFragment : PreferenceFragment(),
             PreferKey.webDavDir,
             remoteSyncMode,
             qreadBaseUrl,
+            qreadUsername,
+            qreadPassword,
             qreadToken -> listView.post {
                 upPreferenceSummary(key, appCtx.getPrefString(key))
+                if (key == remoteSyncMode) {
+                    updateConfigCategoryVisibility(appCtx.getPrefString(remoteSyncMode))
+                }
                 viewModel.upWebDavConfig()
             }
 
@@ -235,6 +263,13 @@ class BackupConfigFragment : PreferenceFragment(),
                     preference.summary = "*".repeat(value.length)
                 }
 
+            qreadPassword ->
+                if (value.isNullOrEmpty()) {
+                    preference.summary = getString(R.string.qread_password_s)
+                } else {
+                    preference.summary = "*".repeat(value.length)
+                }
+
             PreferKey.webDavDir -> preference.summary = when (value) {
                 null -> "legado"
                 else -> value
@@ -252,6 +287,12 @@ class BackupConfigFragment : PreferenceFragment(),
         }
     }
 
+    private fun updateConfigCategoryVisibility(mode: String?) {
+        val isWebDavMode = mode.equals(MODE_WEBDAV, ignoreCase = true)
+        findPreference<PreferenceCategory>(WEB_DAV_CONFIG_CATEGORY)?.isVisible = isWebDavMode
+        findPreference<PreferenceCategory>(QREAD_CONFIG_CATEGORY)?.isVisible = !isWebDavMode
+    }
+
     override fun onPreferenceTreeClick(preference: Preference): Boolean {
         when (preference.key) {
             PreferKey.backupPath -> selectBackupPath.launch()
@@ -259,8 +300,79 @@ class BackupConfigFragment : PreferenceFragment(),
             "web_dav_backup" -> backup()
             "web_dav_restore" -> restore()
             "import_old" -> restoreOld.launch()
+            "qreadLogin" -> loginQRead()
         }
         return super.onPreferenceTreeClick(preference)
+    }
+
+    private fun loginQRead() {
+        val baseUrl = appCtx.getPrefString(qreadBaseUrl)?.trim().orEmpty().trimEnd('/')
+        val username = appCtx.getPrefString(qreadUsername)?.trim().orEmpty()
+        val password = appCtx.getPrefString(qreadPassword)?.trim().orEmpty()
+        if (baseUrl.isBlank() || username.isBlank() || password.isBlank()) {
+            appCtx.toastOnUi("请先填写 QRead 地址、账号和密码")
+            return
+        }
+        waitDialog.setText("QRead 登录中…")
+        waitDialog.show()
+        lifecycleScope.launch(IO) {
+            runCatching {
+                requestQReadToken(baseUrl, username, password)
+            }.onSuccess { token ->
+                withContext(Main) {
+                    waitDialog.dismiss()
+                    if (token.isNullOrBlank()) {
+                        appCtx.toastOnUi("QRead 登录成功，但未返回 accessToken")
+                    } else {
+                        appCtx.putPrefString(qreadToken, token)
+                        upPreferenceSummary(qreadToken, token)
+                        appCtx.toastOnUi("QRead 登录成功，Token 已更新")
+                    }
+                }
+            }.onFailure { error ->
+                withContext(Main) {
+                    waitDialog.dismiss()
+                    appCtx.toastOnUi("QRead 登录失败\n${error.localizedMessage ?: "未知错误"}")
+                }
+            }
+        }
+    }
+
+    private fun requestQReadToken(baseUrl: String, username: String, password: String): String? {
+        var lastError: Throwable? = null
+        QREAD_API_VERSIONS.forEach { version ->
+            runCatching {
+                val loginUrl = "$baseUrl/api/$version/login"
+                val body = FormBody.Builder()
+                    .add("username", username)
+                    .add("password", password)
+                    .add("model", "Legado-Android")
+                    .build()
+                val request = Request.Builder()
+                    .url(loginUrl)
+                    .post(body)
+                    .build()
+                io.legado.app.help.http.okHttpClient.newCall(request).execute().use { response ->
+                    val payload = response.body?.string().orEmpty()
+                    if (!response.isSuccessful) {
+                        error("HTTP ${response.code}")
+                    }
+                    val json = JSONObject(payload)
+                    val isSuccess = json.optBoolean("isSuccess", false)
+                    if (!isSuccess) {
+                        error(json.optString("errorMsg", "login failed"))
+                    }
+                    val data = json.optJSONObject("data")
+                    data?.optString("accessToken")?.takeIf { it.isNotBlank() }
+                }
+            }.onSuccess { token ->
+                if (!token.isNullOrBlank()) return token
+                lastError = IllegalStateException("accessToken is empty")
+            }.onFailure {
+                lastError = it
+            }
+        }
+        throw lastError ?: IllegalStateException("QRead login failed")
     }
 
     /**

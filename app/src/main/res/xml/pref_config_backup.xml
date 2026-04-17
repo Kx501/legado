@@ -3,6 +3,7 @@
     xmlns:app="http://schemas.android.com/apk/res-auto">
 
     <io.legado.app.lib.prefs.PreferenceCategory
+        android:key="syncChannelCategory"
         android:title="@string/remote_sync_set"
         app:allowDividerAbove="false"
         app:allowDividerBelow="false"
@@ -37,21 +38,10 @@
             app:allowDividerBelow="false"
             app:iconSpaceReserved="false" />
 
-        <io.legado.app.lib.prefs.EditTextPreference
-            android:key="qreadBaseUrl"
-            android:summary="@string/qread_base_url_s"
-            android:title="@string/qread_base_url_t"
-            app:iconSpaceReserved="false" />
-
-        <io.legado.app.lib.prefs.EditTextPreference
-            android:key="qreadToken"
-            android:summary="@string/qread_token_s"
-            android:title="@string/qread_token_t"
-            app:iconSpaceReserved="false" />
-
     </io.legado.app.lib.prefs.PreferenceCategory>
 
     <io.legado.app.lib.prefs.PreferenceCategory
+        android:key="webDavConfigCategory"
         android:title="@string/web_dav_set"
         app:allowDividerAbove="false"
         app:allowDividerBelow="false"
@@ -86,6 +76,48 @@
         <io.legado.app.lib.prefs.EditTextPreference
             android:key="webDavDeviceName"
             android:title="@string/webdav_device_name"
+            app:allowDividerAbove="false"
+            app:allowDividerBelow="false"
+            app:iconSpaceReserved="false" />
+
+    </io.legado.app.lib.prefs.PreferenceCategory>
+
+    <io.legado.app.lib.prefs.PreferenceCategory
+        android:key="qreadConfigCategory"
+        android:title="@string/qread_config_set"
+        app:allowDividerAbove="false"
+        app:allowDividerBelow="false"
+        app:iconSpaceReserved="false"
+        app:layout="@layout/view_preference_category">
+
+        <io.legado.app.lib.prefs.EditTextPreference
+            android:key="qreadBaseUrl"
+            android:summary="@string/qread_base_url_s"
+            android:title="@string/qread_base_url_t"
+            app:iconSpaceReserved="false" />
+
+        <io.legado.app.lib.prefs.EditTextPreference
+            android:key="qreadUsername"
+            android:summary="@string/qread_username_s"
+            android:title="@string/qread_username_t"
+            app:iconSpaceReserved="false" />
+
+        <io.legado.app.lib.prefs.EditTextPreference
+            android:key="qreadPassword"
+            android:summary="@string/qread_password_s"
+            android:title="@string/qread_password_t"
+            app:iconSpaceReserved="false" />
+
+        <io.legado.app.lib.prefs.EditTextPreference
+            android:key="qreadToken"
+            android:summary="@string/qread_token_s"
+            android:title="@string/qread_token_t"
+            app:iconSpaceReserved="false" />
+
+        <io.legado.app.lib.prefs.Preference
+            android:key="qreadLogin"
+            android:summary="@string/qread_login_s"
+            android:title="@string/qread_login_t"
             app:allowDividerAbove="false"
             app:allowDividerBelow="false"
             app:iconSpaceReserved="false" />

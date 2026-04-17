@@ -545,6 +545,10 @@ object AppConfig : SharedPreferences.OnSharedPreferenceChangeListener {
 
     val qreadBaseUrl get() = appCtx.getPrefString(PreferKey.qreadBaseUrl)?.trim().orEmpty()
 
+    val qreadUsername get() = appCtx.getPrefString(PreferKey.qreadUsername)?.trim().orEmpty()
+
+    val qreadPassword get() = appCtx.getPrefString(PreferKey.qreadPassword)?.trim().orEmpty()
+
     val qreadToken get() = appCtx.getPrefString(PreferKey.qreadToken)?.trim().orEmpty()
 
     val mediaButtonOnExit get() = appCtx.getPrefBoolean("mediaButtonOnExit", true)
