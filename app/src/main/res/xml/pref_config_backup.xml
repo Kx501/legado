@@ -109,9 +109,9 @@
             app:iconSpaceReserved="false" />
 
         <io.legado.app.lib.prefs.EditTextPreference
-            android:key="qreadToken"
-            android:summary="@string/qread_token_s"
-            android:title="@string/qread_token_t"
+            android:key="qreadInviteCode"
+            android:summary="@string/qread_invite_code_s"
+            android:title="@string/qread_invite_code_t"
             app:iconSpaceReserved="false" />
 
         <io.legado.app.lib.prefs.Preference

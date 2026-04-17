@@ -7,14 +7,15 @@ import io.legado.app.data.entities.BookProgress
 import io.legado.app.help.AppWebDav
 import io.legado.app.help.config.AppConfig
 import io.legado.app.help.http.okHttpClient
-import io.legado.app.utils.GSON
-import io.legado.app.utils.fromJsonObject
 import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.ensureActive
-import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.HttpUrl.Companion.toHttpUrl
+import okhttp3.MediaType.Companion.toMediaType
+import okhttp3.FormBody
 import okhttp3.Request
 import okhttp3.RequestBody.Companion.toRequestBody
+import org.json.JSONArray
+import org.json.JSONObject
 
 private enum class RemoteSyncMode(val value: String) {
     LOCAL_ONLY("local"),
@@ -29,9 +30,33 @@ private enum class RemoteSyncMode(val value: String) {
 }
 
 /**
- * 阶段1统一远端进度入口：默认沿用 WebDav；QRead 走最小接口骨架。
+ * 统一远端进度入口：WebDav 与 QRead 共用此桥接层。
  */
 object RemoteProgressBridge {
+    private const val QREAD_CLIENT_VERSION = "3.1.0"
+    private val QREAD_API_VERSIONS = intArrayOf(5, 1)
+    private const val QREAD_PATH_GET_BOOKSHELF = "/api/%d/getBookshelf"
+    private const val QREAD_PATH_SAVE_BOOK_PROGRESS = "/api/%d/saveBookProgress"
+    private const val QREAD_PATH_SAVE_BOOKS = "/api/%d/saveBooks"
+    private const val PARAM_ACCESS_TOKEN = "accessToken"
+    private const val PARAM_VERSION = "version"
+    private const val PARAM_NAME = "name"
+    private const val PARAM_URL = "url"
+    private const val PARAM_POS = "pos"
+    private const val PARAM_TITLE = "title"
+    private const val PARAM_INDEX = "index"
+    private const val PARAM_IS_NEW = "isnew"
+    private const val QREAD_IS_SUCCESS = "isSuccess"
+    private const val QREAD_ERROR_MSG = "errorMsg"
+    private const val QREAD_DATA = "data"
+    private const val QREAD_BOOK_URL = "bookUrl"
+    private const val QREAD_NAME = "name"
+    private const val QREAD_AUTHOR = "author"
+    private const val QREAD_DUR_CHAPTER_INDEX = "durChapterIndex"
+    private const val QREAD_DUR_CHAPTER_POS = "durChapterPos"
+    private const val QREAD_DUR_CHAPTER_TIME = "durChapterTime"
+    private const val QREAD_DUR_CHAPTER_TITLE = "durChapterTitle"
+    private const val QREAD_CONTENT_TYPE_JSON = "application/json; charset=utf-8"
 
     suspend fun uploadBookProgress(
         book: Book,
@@ -41,7 +66,7 @@ object RemoteProgressBridge {
         when (RemoteSyncMode.fromValue(AppConfig.remoteSyncMode)) {
             RemoteSyncMode.LOCAL_ONLY -> onSuccess?.invoke()
             RemoteSyncMode.WEBDAV -> AppWebDav.uploadBookProgress(book, toast, onSuccess)
-            RemoteSyncMode.QREAD -> uploadBookProgressQRead(BookProgress(book), onSuccess)
+            RemoteSyncMode.QREAD -> uploadBookProgressQRead(book, BookProgress(book), onSuccess)
         }
     }
 
@@ -76,23 +101,52 @@ object RemoteProgressBridge {
         progress: BookProgress,
         onSuccess: (() -> Unit)? = null
     ) {
+        val localBook = appDb.bookDao.getBook(progress.name, progress.author)
+        uploadBookProgressQRead(localBook, progress, onSuccess)
+    }
+
+    private suspend fun uploadBookProgressQRead(
+        book: Book?,
+        progress: BookProgress,
+        onSuccess: (() -> Unit)? = null
+    ) {
         val baseUrl = AppConfig.qreadBaseUrl.trimEnd('/')
         val token = AppConfig.qreadToken
-        if (baseUrl.isBlank() || token.isBlank()) return
+        val bookUrl = book?.bookUrl.orEmpty()
+        if (baseUrl.isBlank() || token.isBlank() || bookUrl.isBlank()) return
         try {
-            val body = GSON.toJson(progress)
-                .toRequestBody("application/json; charset=utf-8".toMediaType())
-            val request = Request.Builder()
-                .url("$baseUrl/api/v1/sync/progress")
-                .header("Authorization", "Bearer $token")
-                .post(body)
-                .build()
-            okHttpClient.newCall(request).execute().use { response ->
-                if (response.isSuccessful) {
-                    onSuccess?.invoke()
-                } else {
-                    AppLog.put("QRead上传进度失败, code=${response.code}")
+            if (book != null && !ensureBookOnQReadShelf(baseUrl, token, book)) {
+                AppLog.put("QRead书架缺书且自动入架失败, bookUrl=$bookUrl")
+                return
+            }
+            var uploadOk = false
+            QREAD_API_VERSIONS.forEach { version ->
+                val form = FormBody.Builder()
+                    .add(PARAM_ACCESS_TOKEN, token)
+                    .add(PARAM_URL, bookUrl)
+                    .add(PARAM_POS, progress.durChapterPos.toDouble().toString())
+                    .add(PARAM_TITLE, progress.durChapterTitle.orEmpty())
+                    .add(PARAM_INDEX, progress.durChapterIndex.toString())
+                    .add(PARAM_IS_NEW, "0")
+                    .build()
+                val request = Request.Builder()
+                    .url("$baseUrl${QREAD_PATH_SAVE_BOOK_PROGRESS.format(version)}")
+                    .post(form)
+                    .build()
+                okHttpClient.newCall(request).execute().use { response ->
+                    if (!response.isSuccessful) return@use
+                    val payload = response.body?.string().orEmpty()
+                    val json = runCatching { JSONObject(payload) }.getOrNull() ?: return@use
+                    if (json.optBoolean(QREAD_IS_SUCCESS, false)) {
+                        uploadOk = true
+                    }
                 }
+                if (uploadOk) return@forEach
+            }
+            if (uploadOk) {
+                onSuccess?.invoke()
+            } else {
+                AppLog.put("QRead上传进度失败, bookUrl=$bookUrl")
             }
         } catch (e: Exception) {
             currentCoroutineContext().ensureActive()
@@ -100,30 +154,72 @@ object RemoteProgressBridge {
         }
     }
 
+    private suspend fun ensureBookOnQReadShelf(baseUrl: String, token: String, book: Book): Boolean {
+        val existed = fetchBookProgressListQRead(baseUrl, token, book.name).any {
+            (!it.bookUrl.isNullOrBlank() && it.bookUrl == book.bookUrl) ||
+                (it.name == book.name && it.author == book.author)
+        }
+        if (existed) return true
+        return addBookToQReadShelf(baseUrl, token, book)
+    }
+
+    private suspend fun addBookToQReadShelf(baseUrl: String, token: String, book: Book): Boolean {
+        val item = JSONObject().apply {
+            put(QREAD_BOOK_URL, book.bookUrl)
+            put("tocUrl", book.tocUrl)
+            put("origin", book.origin)
+            put("originName", book.originName)
+            put("name", book.name)
+            put("author", book.author)
+            put("kind", book.kind ?: "")
+            put("coverUrl", book.coverUrl ?: "")
+            put("intro", book.intro ?: "")
+            put("type", book.type)
+            put(QREAD_DUR_CHAPTER_TITLE, book.durChapterTitle ?: "")
+            put(QREAD_DUR_CHAPTER_INDEX, book.durChapterIndex)
+            put(QREAD_DUR_CHAPTER_POS, book.durChapterPos.toDouble())
+            put(QREAD_DUR_CHAPTER_TIME, book.durChapterTime)
+            put("wordCount", book.wordCount ?: "")
+            put("latestChapterTitle", book.latestChapterTitle ?: "")
+            put("latestChapterTime", book.latestChapterTime)
+            put("lastCheckTime", book.lastCheckTime)
+            put("lastCheckCount", book.lastCheckCount)
+            put("totalChapterNum", book.totalChapterNum)
+        }
+        val content = JSONArray().put(item).toString()
+        QREAD_API_VERSIONS.forEach { version ->
+            val requestUrl = "$baseUrl${QREAD_PATH_SAVE_BOOKS.format(version)}".toHttpUrl()
+                .newBuilder()
+                .addQueryParameter(PARAM_ACCESS_TOKEN, token)
+                .build()
+            val request = Request.Builder()
+                .url(requestUrl)
+                .post(content.toRequestBody(QREAD_CONTENT_TYPE_JSON.toMediaType()))
+                .build()
+            okHttpClient.newCall(request).execute().use { response ->
+                if (!response.isSuccessful) return@use
+                val body = response.body?.string().orEmpty()
+                val root = runCatching { JSONObject(body) }.getOrNull() ?: return@use
+                if (root.optBoolean(QREAD_IS_SUCCESS, false)) {
+                    return true
+                }
+            }
+        }
+        return false
+    }
+
     private suspend fun getBookProgressQRead(book: Book): BookProgress? {
         val baseUrl = AppConfig.qreadBaseUrl.trimEnd('/')
         val token = AppConfig.qreadToken
         if (baseUrl.isBlank() || token.isBlank()) return null
         return try {
-            val url = "$baseUrl/api/v1/sync/progress".toHttpUrl()
-                .newBuilder()
-                .addQueryParameter("name", book.name)
-                .addQueryParameter("author", book.author)
-                .build()
-            val request = Request.Builder()
-                .url(url)
-                .header("Authorization", "Bearer $token")
-                .get()
-                .build()
-            okHttpClient.newCall(request).execute().use { response ->
-                if (!response.isSuccessful) {
-                    AppLog.put("QRead拉取进度失败, code=${response.code}")
-                    null
-                } else {
-                    val body = response.body?.string().orEmpty()
-                    GSON.fromJsonObject<BookProgress>(body).getOrNull()
-                }
-            }
+            val progressList = fetchBookProgressListQRead(baseUrl, token, book.name)
+            progressList.firstOrNull {
+                !it.bookUrl.isNullOrBlank() && it.bookUrl == book.bookUrl
+            }?.toBookProgress()
+                ?: progressList.firstOrNull {
+                    it.name == book.name && it.author == book.author
+                }?.toBookProgress()
         } catch (e: Exception) {
             currentCoroutineContext().ensureActive()
             AppLog.put("QRead拉取进度异常\n${e.localizedMessage}", e)
@@ -131,20 +227,109 @@ object RemoteProgressBridge {
         }
     }
 
+    private suspend fun fetchBookProgressListQRead(
+        baseUrl: String,
+        token: String,
+        name: String? = null
+    ): List<QReadBookProgressPayload> {
+        QREAD_API_VERSIONS.forEach { version ->
+            val requestUrl = "$baseUrl${QREAD_PATH_GET_BOOKSHELF.format(version)}".toHttpUrl()
+                .newBuilder()
+                .addQueryParameter(PARAM_ACCESS_TOKEN, token)
+                .addQueryParameter(PARAM_VERSION, QREAD_CLIENT_VERSION)
+                .apply {
+                    if (!name.isNullOrBlank()) {
+                        addQueryParameter(PARAM_NAME, name)
+                    }
+                }
+                .build()
+            val request = Request.Builder()
+                .url(requestUrl)
+                .get()
+                .build()
+            okHttpClient.newCall(request).execute().use { response ->
+                if (!response.isSuccessful) return@use
+                val body = response.body?.string().orEmpty()
+                val root = runCatching { JSONObject(body) }.getOrNull() ?: return@use
+                if (!root.optBoolean(QREAD_IS_SUCCESS, false)) {
+                    val errorMsg = root.optString(QREAD_ERROR_MSG)
+                    if (errorMsg.isNotBlank()) {
+                        AppLog.put("QRead拉取书架失败: $errorMsg")
+                    }
+                    return@use
+                }
+                val dataArray = root.optJSONArray(QREAD_DATA) ?: return@use
+                val result = mutableListOf<QReadBookProgressPayload>()
+                for (i in 0 until dataArray.length()) {
+                    val item = dataArray.optJSONObject(i) ?: continue
+                    result.add(
+                        QReadBookProgressPayload(
+                            name = item.optString(QREAD_NAME),
+                            author = item.optString(QREAD_AUTHOR),
+                            bookUrl = item.optString(QREAD_BOOK_URL),
+                            durChapterIndex = item.optInt(QREAD_DUR_CHAPTER_INDEX, 0),
+                            durChapterPos = item.optDouble(QREAD_DUR_CHAPTER_POS, 0.0).toInt(),
+                            durChapterTime = item.optLong(QREAD_DUR_CHAPTER_TIME, 0L),
+                            durChapterTitle = item.optString(QREAD_DUR_CHAPTER_TITLE).ifBlank { null }
+                        )
+                    )
+                }
+                return result
+            }
+        }
+        return emptyList()
+    }
+
     private suspend fun downloadAllBookProgressQRead() {
-        val books = appDb.bookDao.all
-        books.forEach { book ->
-            val progress = getBookProgressQRead(book) ?: return@forEach
+        val baseUrl = AppConfig.qreadBaseUrl.trimEnd('/')
+        val token = AppConfig.qreadToken
+        if (baseUrl.isBlank() || token.isBlank()) return
+        val progressList = fetchBookProgressListQRead(baseUrl, token)
+        if (progressList.isEmpty()) return
+        val localBooks = appDb.bookDao.all
+        localBooks.forEach { book ->
+            val progress = progressList.firstOrNull {
+                !it.bookUrl.isNullOrBlank() && it.bookUrl == book.bookUrl
+            }?.toBookProgress()
+                ?: progressList.firstOrNull {
+                    it.name == book.name && it.author == book.author
+                }?.toBookProgress()
+                ?: return@forEach
             if (progress.durChapterIndex > book.durChapterIndex ||
                 (progress.durChapterIndex == book.durChapterIndex &&
                     progress.durChapterPos > book.durChapterPos)
             ) {
                 book.durChapterIndex = progress.durChapterIndex
                 book.durChapterPos = progress.durChapterPos
-                book.durChapterTitle = progress.durChapterTitle
-                book.durChapterTime = progress.durChapterTime
+                if (!progress.durChapterTitle.isNullOrBlank()) {
+                    book.durChapterTitle = progress.durChapterTitle
+                }
+                if (progress.durChapterTime > 0L) {
+                    book.durChapterTime = progress.durChapterTime
+                }
                 appDb.bookDao.update(book)
             }
         }
+    }
+}
+
+private data class QReadBookProgressPayload(
+    val name: String,
+    val author: String,
+    val bookUrl: String?,
+    val durChapterIndex: Int,
+    val durChapterPos: Int,
+    val durChapterTime: Long,
+    val durChapterTitle: String?
+) {
+    fun toBookProgress(): BookProgress {
+        return BookProgress(
+            name = name,
+            author = author,
+            durChapterIndex = durChapterIndex,
+            durChapterPos = durChapterPos,
+            durChapterTime = durChapterTime,
+            durChapterTitle = durChapterTitle
+        )
     }
 }

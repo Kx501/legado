@@ -16,6 +16,7 @@ import androidx.preference.ListPreference
 import androidx.preference.Preference
 import androidx.preference.PreferenceCategory
 import io.legado.app.constant.PreferKey.qreadBaseUrl
+import io.legado.app.constant.PreferKey.qreadInviteCode
 import io.legado.app.constant.PreferKey.qreadPassword
 import io.legado.app.constant.PreferKey.qreadToken
 import io.legado.app.constant.PreferKey.qreadUsername
@@ -72,6 +73,15 @@ class BackupConfigFragment : PreferenceFragment(),
         private const val MODE_WEBDAV = "webdav"
         private const val WEB_DAV_CONFIG_CATEGORY = "webDavConfigCategory"
         private const val QREAD_CONFIG_CATEGORY = "qreadConfigCategory"
+        private const val QREAD_MODEL = "Legado-Android"
+        private const val QREAD_NEED_CODE_PATH = "/needcode"
+        private const val QREAD_LOGIN_PATH_TEMPLATE = "/api/%d/login"
+        private const val QREAD_NEED_CODE_API_PATH_TEMPLATE = "/api/%d/needcode"
+        private const val QREAD_PARAM_USERNAME = "username"
+        private const val QREAD_PARAM_PASSWORD = "password"
+        private const val QREAD_PARAM_MODEL = "model"
+        private const val QREAD_PARAM_CODE = "code"
+        private const val QREAD_PARAM_INVITE_CODE = "inviteCode"
         private val QREAD_API_VERSIONS = intArrayOf(5, 1)
     }
 
@@ -79,6 +89,7 @@ class BackupConfigFragment : PreferenceFragment(),
     private val waitDialog by lazy { WaitDialog(requireContext()) }
     private var backupJob: Job? = null
     private var restoreJob: Job? = null
+    private var qreadNeedInviteCode: Boolean? = null
 
     private val selectBackupPath = registerForActivityResult(HandleFileContract()) {
         it.uri?.let { uri ->
@@ -131,13 +142,6 @@ class BackupConfigFragment : PreferenceFragment(),
                 editText.setSelection(editText.text.length)
             }
         }
-        findPreference<EditTextPreference>(qreadToken)?.let {
-            it.setOnBindEditTextListener { editText ->
-                editText.inputType =
-                    InputType.TYPE_TEXT_VARIATION_PASSWORD or InputType.TYPE_CLASS_TEXT
-                editText.setSelection(editText.text.length)
-            }
-        }
         findPreference<EditTextPreference>(qreadPassword)?.let {
             it.setOnBindEditTextListener { editText ->
                 editText.inputType =
@@ -166,9 +170,11 @@ class BackupConfigFragment : PreferenceFragment(),
         upPreferenceSummary(qreadBaseUrl, getPrefString(qreadBaseUrl))
         upPreferenceSummary(qreadUsername, getPrefString(qreadUsername))
         upPreferenceSummary(qreadPassword, getPrefString(qreadPassword))
-        upPreferenceSummary(qreadToken, getPrefString(qreadToken))
+        upPreferenceSummary(qreadInviteCode, getPrefString(qreadInviteCode))
         upPreferenceSummary(PreferKey.backupPath, getPrefString(PreferKey.backupPath))
+        updateInviteCodePreferenceHint()
         updateConfigCategoryVisibility(getPrefString(remoteSyncMode))
+        detectQReadInviteCodeRequirement(getPrefString(qreadBaseUrl))
         findPreference<io.legado.app.lib.prefs.Preference>("web_dav_restore")
             ?.onLongClick {
                 restoreFromLocal()
@@ -220,10 +226,14 @@ class BackupConfigFragment : PreferenceFragment(),
             qreadBaseUrl,
             qreadUsername,
             qreadPassword,
+            qreadInviteCode,
             qreadToken -> listView.post {
                 upPreferenceSummary(key, appCtx.getPrefString(key))
                 if (key == remoteSyncMode) {
                     updateConfigCategoryVisibility(appCtx.getPrefString(remoteSyncMode))
+                }
+                if (key == qreadBaseUrl) {
+                    detectQReadInviteCodeRequirement(appCtx.getPrefString(qreadBaseUrl))
                 }
                 viewModel.upWebDavConfig()
             }
@@ -252,13 +262,6 @@ class BackupConfigFragment : PreferenceFragment(),
             PreferKey.webDavPassword ->
                 if (value.isNullOrEmpty()) {
                     preference.summary = getString(R.string.web_dav_pw_s)
-                } else {
-                    preference.summary = "*".repeat(value.length)
-                }
-
-            qreadToken ->
-                if (value.isNullOrEmpty()) {
-                    preference.summary = getString(R.string.qread_token_s)
                 } else {
                     preference.summary = "*".repeat(value.length)
                 }
@@ -293,6 +296,55 @@ class BackupConfigFragment : PreferenceFragment(),
         findPreference<PreferenceCategory>(QREAD_CONFIG_CATEGORY)?.isVisible = !isWebDavMode
     }
 
+    private fun updateInviteCodePreferenceHint() {
+        val invitePreference = findPreference<Preference>(qreadInviteCode) ?: return
+        invitePreference.summary = when (qreadNeedInviteCode) {
+            true -> getString(R.string.qread_invite_code_required_s)
+            false -> getString(R.string.qread_invite_code_s)
+            null -> getString(R.string.qread_invite_code_detecting_s)
+        }
+    }
+
+    private fun detectQReadInviteCodeRequirement(rawBaseUrl: String?) {
+        val baseUrl = rawBaseUrl?.trim().orEmpty().trimEnd('/')
+        if (baseUrl.isBlank()) {
+            qreadNeedInviteCode = null
+            updateInviteCodePreferenceHint()
+            return
+        }
+        lifecycleScope.launch(IO) {
+            val detectResult = runCatching {
+                queryQReadNeedInviteCode(baseUrl)
+            }.getOrNull()
+            withContext(Main) {
+                qreadNeedInviteCode = detectResult
+                updateInviteCodePreferenceHint()
+            }
+        }
+    }
+
+    private fun queryQReadNeedInviteCode(baseUrl: String): Boolean? {
+        val detectPaths = mutableListOf("$baseUrl$QREAD_NEED_CODE_PATH")
+        QREAD_API_VERSIONS.forEach { version ->
+            detectPaths.add("$baseUrl${QREAD_NEED_CODE_API_PATH_TEMPLATE.format(version)}")
+        }
+        detectPaths.forEach { url ->
+            runCatching {
+                val request = Request.Builder().url(url).get().build()
+                io.legado.app.help.http.okHttpClient.newCall(request).execute().use { response ->
+                    if (!response.isSuccessful) return@use null
+                    val payload = response.body?.string().orEmpty()
+                    if (payload.isBlank()) return@use null
+                    val json = JSONObject(payload)
+                    json.optBoolean("isSuccess")
+                }
+            }.onSuccess { needCode ->
+                if (needCode != null) return needCode
+            }
+        }
+        return null
+    }
+
     override fun onPreferenceTreeClick(preference: Preference): Boolean {
         when (preference.key) {
             PreferKey.backupPath -> selectBackupPath.launch()
@@ -309,45 +361,64 @@ class BackupConfigFragment : PreferenceFragment(),
         val baseUrl = appCtx.getPrefString(qreadBaseUrl)?.trim().orEmpty().trimEnd('/')
         val username = appCtx.getPrefString(qreadUsername)?.trim().orEmpty()
         val password = appCtx.getPrefString(qreadPassword)?.trim().orEmpty()
+        val inviteCode = appCtx.getPrefString(qreadInviteCode)?.trim().orEmpty()
         if (baseUrl.isBlank() || username.isBlank() || password.isBlank()) {
-            appCtx.toastOnUi("请先填写 QRead 地址、账号和密码")
+            appCtx.toastOnUi(R.string.qread_login_missing_required_fields)
             return
         }
-        waitDialog.setText("QRead 登录中…")
+        if (qreadNeedInviteCode == true && inviteCode.isBlank()) {
+            appCtx.toastOnUi(R.string.qread_login_invite_code_required)
+            return
+        }
+        waitDialog.setText(getString(R.string.qread_login_loading))
         waitDialog.show()
         lifecycleScope.launch(IO) {
             runCatching {
-                requestQReadToken(baseUrl, username, password)
+                requestQReadToken(baseUrl, username, password, inviteCode)
             }.onSuccess { token ->
                 withContext(Main) {
                     waitDialog.dismiss()
                     if (token.isNullOrBlank()) {
-                        appCtx.toastOnUi("QRead 登录成功，但未返回 accessToken")
+                        appCtx.toastOnUi(R.string.qread_login_token_empty)
                     } else {
                         appCtx.putPrefString(qreadToken, token)
                         upPreferenceSummary(qreadToken, token)
-                        appCtx.toastOnUi("QRead 登录成功，Token 已更新")
+                        appCtx.toastOnUi(R.string.qread_login_success)
                     }
                 }
             }.onFailure { error ->
                 withContext(Main) {
                     waitDialog.dismiss()
-                    appCtx.toastOnUi("QRead 登录失败\n${error.localizedMessage ?: "未知错误"}")
+                    appCtx.toastOnUi(
+                        getString(
+                            R.string.qread_login_failed,
+                            error.localizedMessage ?: getString(R.string.unknown_error)
+                        )
+                    )
                 }
             }
         }
     }
 
-    private fun requestQReadToken(baseUrl: String, username: String, password: String): String? {
+    private fun requestQReadToken(
+        baseUrl: String,
+        username: String,
+        password: String,
+        inviteCode: String
+    ): String? {
         var lastError: Throwable? = null
         QREAD_API_VERSIONS.forEach { version ->
             runCatching {
-                val loginUrl = "$baseUrl/api/$version/login"
-                val body = FormBody.Builder()
-                    .add("username", username)
-                    .add("password", password)
-                    .add("model", "Legado-Android")
-                    .build()
+                val loginUrl = "$baseUrl${QREAD_LOGIN_PATH_TEMPLATE.format(version)}"
+                val formBuilder = FormBody.Builder()
+                    .add(QREAD_PARAM_USERNAME, username)
+                    .add(QREAD_PARAM_PASSWORD, password)
+                    .add(QREAD_PARAM_MODEL, QREAD_MODEL)
+                if (inviteCode.isNotBlank()) {
+                    formBuilder.add(QREAD_PARAM_CODE, inviteCode)
+                    formBuilder.add(QREAD_PARAM_INVITE_CODE, inviteCode)
+                }
+                val body = formBuilder.build()
                 val request = Request.Builder()
                     .url(loginUrl)
                     .post(body)
