@@ -363,6 +363,12 @@ class ReadBookActivity : BaseReadBookActivity(),
         // 网络监听，当从无网切换到网络环境时同步进度（注意注册的同时就会收到监听，因此界面激活时无需重复执行同步操作）
         networkChangedListener.register()
         networkChangedListener.onNetworkChanged = {}
+        if (ReadBook.inBookshelf && AppConfig.syncBookProgress) {
+            lifecycleScope.launch(IO) {
+                RemoteProgressBridge.startQReadPushIfEnabled()
+                ReadBook.syncProgress({ progress -> sureNewProgress(progress) })
+            }
+        }
     }
 
     override fun onPause() {

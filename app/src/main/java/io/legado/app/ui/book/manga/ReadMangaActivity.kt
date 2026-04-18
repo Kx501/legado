@@ -34,6 +34,7 @@ import io.legado.app.databinding.ViewLoadMoreBinding
 import io.legado.app.help.book.isImage
 import io.legado.app.help.book.removeType
 import io.legado.app.help.config.AppConfig
+import io.legado.app.help.remote.RemoteProgressBridge
 import io.legado.app.help.storage.Backup
 import io.legado.app.lib.dialogs.alert
 import io.legado.app.model.ReadManga
@@ -353,6 +354,12 @@ class ReadMangaActivity : VMBaseActivity<ActivityMangaBinding, ReadMangaViewMode
         super.onResume()
         networkChangedListener.register()
         networkChangedListener.onNetworkChanged = {}
+        if (ReadManga.inBookshelf && AppConfig.syncBookProgress) {
+            lifecycleScope.launch {
+                RemoteProgressBridge.startQReadPushIfEnabled()
+                ReadManga.syncProgress({ progress -> sureNewProgress(progress) })
+            }
+        }
         if (enableAutoScrollPage) {
             mScrollTimer.isEnabledPage = true
         }

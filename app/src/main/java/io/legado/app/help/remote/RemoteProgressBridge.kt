@@ -1,5 +1,6 @@
 package io.legado.app.help.remote
 
+import io.legado.app.BuildConfig
 import io.legado.app.constant.AppLog
 import io.legado.app.constant.BookType
 import io.legado.app.constant.EventBus
@@ -34,6 +35,7 @@ import okhttp3.WebSocketListener
 import org.json.JSONArray
 import org.json.JSONObject
 import splitties.init.appCtx
+import io.legado.app.utils.LogUtils
 import io.legado.app.utils.postEvent
 
 private enum class RemoteSyncMode(val value: String) {
@@ -92,10 +94,25 @@ object RemoteProgressBridge {
     private const val QREAD_CONTENT_TYPE_JSON = "application/json; charset=utf-8"
     private const val LOG_QREAD_PREFIX = "QRead请求失败"
     private const val MODE_QREAD = "qread"
+    private const val TAG_QREAD_PUSH = "QReadPush"
+    private const val QREAD_PUSH_MSG_LOG_MAX = 240
     @Volatile
     private var qreadSocket: WebSocket? = null
     @Volatile
     private var qreadSocketConnecting = false
+
+    private inline fun qreadPushDebug(lazyMsg: () -> String) {
+        if (BuildConfig.DEBUG || AppConfig.recordLog) {
+            LogUtils.d(TAG_QREAD_PUSH, lazyMsg)
+        }
+    }
+
+    /** WebSocket URL 日志脱敏：不输出 token */
+    private fun maskQreadWebSocketUrlForLog(wsUrl: String): String {
+        val q = wsUrl.indexOf('?')
+        if (q < 0) return wsUrl
+        return wsUrl.substring(0, q) + "?id=***"
+    }
 
     suspend fun uploadBookProgress(
         book: Book,
@@ -164,32 +181,54 @@ object RemoteProgressBridge {
     }
 
     fun startQReadPushIfEnabled() {
-        if (!AppConfig.remoteSyncMode.equals(MODE_QREAD, true)) return
+        if (!AppConfig.remoteSyncMode.equals(MODE_QREAD, true)) {
+            qreadPushDebug { "skip: remoteSyncMode=${AppConfig.remoteSyncMode}" }
+            return
+        }
         val baseUrl = AppConfig.qreadBaseUrl.trimEnd('/')
         val token = AppConfig.qreadToken.trim()
-        if (baseUrl.isBlank() || token.isBlank()) return
-        if (qreadSocket != null || qreadSocketConnecting) return
+        if (baseUrl.isBlank() || token.isBlank()) {
+            qreadPushDebug { "skip: baseUrlOrTokenBlank baseUrlLen=${baseUrl.length} tokenLen=${token.length}" }
+            return
+        }
+        if (qreadSocket != null || qreadSocketConnecting) {
+            qreadPushDebug { "skip: already socket=${qreadSocket != null} connecting=$qreadSocketConnecting" }
+            return
+        }
         qreadSocketConnecting = true
         val wsUrl = qreadWebSocketUrl(baseUrl, token) ?: run {
             qreadSocketConnecting = false
+            qreadPushDebug { "abort: qreadWebSocketUrl null (invalid baseUrl scheme?)" }
             return
         }
+        qreadPushDebug { "connect ${maskQreadWebSocketUrlForLog(wsUrl)}" }
         val request = Request.Builder().url(wsUrl).build()
         qreadSocket = okHttpClient.newWebSocket(request, object : WebSocketListener() {
             override fun onOpen(webSocket: WebSocket, response: Response) {
                 qreadSocketConnecting = false
+                qreadPushDebug { "onOpen http=${response.code} ${response.message}" }
             }
 
             override fun onMessage(webSocket: WebSocket, text: String) {
+                val snippet = if (text.length <= QREAD_PUSH_MSG_LOG_MAX) {
+                    text
+                } else {
+                    text.take(QREAD_PUSH_MSG_LOG_MAX) + "…(${text.length})"
+                }
+                qreadPushDebug { "onMessage len=${text.length} $snippet" }
                 handleQReadPushMessage(text)
             }
 
             override fun onFailure(webSocket: WebSocket, t: Throwable, response: Response?) {
                 qreadSocket = null
                 qreadSocketConnecting = false
+                qreadPushDebug {
+                    "onFailure http=${response?.code} ${response?.message} err=${t.javaClass.simpleName}: ${t.localizedMessage}"
+                }
                 AppLog.put("QRead推送连接失败: ${t.localizedMessage}", t)
                 Coroutine.async {
                     delay(5000)
+                    qreadPushDebug { "reconnect after delay" }
                     startQReadPushIfEnabled()
                 }
             }
@@ -197,6 +236,7 @@ object RemoteProgressBridge {
             override fun onClosed(webSocket: WebSocket, code: Int, reason: String) {
                 qreadSocket = null
                 qreadSocketConnecting = false
+                qreadPushDebug { "onClosed code=$code reason=$reason" }
             }
         })
     }
@@ -217,11 +257,19 @@ object RemoteProgressBridge {
     }
 
     private fun handleQReadPushMessage(text: String) {
-        val msg = runCatching { JSONObject(text) }.getOrNull() ?: return
-        when (msg.optString("msg")) {
+        val msg = runCatching { JSONObject(text) }.getOrNull() ?: run {
+            qreadPushDebug { "drop: not JSON, head=${text.take(80)}" }
+            return
+        }
+        val kind = msg.optString("msg")
+        when (kind) {
             "read" -> {
                 val bookUrl = msg.optString("bookurl").trim()
-                if (bookUrl.isBlank()) return
+                if (bookUrl.isBlank()) {
+                    qreadPushDebug { "read: empty bookurl" }
+                    return
+                }
+                qreadPushDebug { "dispatch read bookUrl.len=${bookUrl.length}" }
                 Coroutine.async {
                     syncBookProgressByBookUrl(bookUrl)
                 }
@@ -229,14 +277,22 @@ object RemoteProgressBridge {
             }
 
             "bookmd5" -> {
+                qreadPushDebug { "dispatch bookmd5 -> downloadAllBookProgress" }
                 Coroutine.async {
                     downloadAllBookProgress()
                 }
             }
 
             "sourcemd5", "rssmd5" -> {
+                qreadPushDebug { "dispatch $kind -> syncQReadSourcesIfEnabled" }
                 Coroutine.async {
                     syncQReadSourcesIfEnabled()
+                }
+            }
+
+            else -> {
+                if (kind.isNotEmpty()) {
+                    qreadPushDebug { "ignore msg type=$kind" }
                 }
             }
         }
