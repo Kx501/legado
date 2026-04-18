@@ -312,7 +312,7 @@ class BackupConfigFragment : PreferenceFragment(),
         } else {
             findPreference<PreferenceCategory>(QREAD_LOCAL_BACKUP_CATEGORY)
         } ?: return
-        val parent = pref.parent as? PreferenceGroup
+        val parent = pref.parent
         if (parent == target) {
             pref.order = 0
             return

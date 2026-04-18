@@ -11,7 +11,7 @@
         app:layout="@layout/view_preference_category">
 
         <io.legado.app.lib.prefs.NameListPreference
-            android:defaultValue="webdav"
+            android:defaultValue="qread"
             android:entries="@array/remote_sync_mode_entries"
             android:entryValues="@array/remote_sync_mode_values"
             android:key="remoteSyncMode"

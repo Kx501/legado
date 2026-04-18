@@ -541,7 +541,7 @@ object AppConfig : SharedPreferences.OnSharedPreferenceChangeListener {
 
     val syncBookProgressPlus get() = appCtx.getPrefBoolean(PreferKey.syncBookProgressPlus, false)
 
-    val remoteSyncMode get() = appCtx.getPrefString(PreferKey.remoteSyncMode, "webdav") ?: "webdav"
+    val remoteSyncMode get() = appCtx.getPrefString(PreferKey.remoteSyncMode, "qread") ?: "qread"
 
     val qreadBaseUrl get() = appCtx.getPrefString(PreferKey.qreadBaseUrl)?.trim().orEmpty()
 
