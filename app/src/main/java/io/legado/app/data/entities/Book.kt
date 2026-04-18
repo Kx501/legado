@@ -19,6 +19,7 @@ import io.legado.app.help.book.isEpub
 import io.legado.app.help.book.isImage
 import io.legado.app.help.book.simulatedTotalChapterNum
 import io.legado.app.help.config.AppConfig
+import io.legado.app.help.remote.RemoteProgressBridge
 import io.legado.app.help.config.ReadBookConfig
 import io.legado.app.model.ReadBook
 import io.legado.app.utils.GSON
@@ -429,6 +430,7 @@ data class Book(
             appDb.bookDao.update(this)
         } else {
             appDb.bookDao.insert(this)
+            RemoteProgressBridge.scheduleSyncBookToQReadShelfIfEnabled(this)
         }
     }
 
@@ -436,6 +438,7 @@ data class Book(
         if (ReadBook.book?.bookUrl == bookUrl) {
             ReadBook.book = null
         }
+        RemoteProgressBridge.scheduleDeleteBookFromQReadShelfIfEnabled(this)
         appDb.bookDao.delete(this)
     }
 

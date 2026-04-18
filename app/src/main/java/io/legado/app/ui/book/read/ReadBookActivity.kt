@@ -48,6 +48,7 @@ import io.legado.app.help.book.removeType
 import io.legado.app.help.book.update
 import io.legado.app.help.config.AppConfig
 import io.legado.app.help.config.ReadBookConfig
+import io.legado.app.help.remote.RemoteProgressBridge
 import io.legado.app.help.config.ReadTipConfig
 import io.legado.app.help.coroutine.Coroutine
 import io.legado.app.help.source.getSourceType
@@ -1108,6 +1109,7 @@ class ReadBookActivity : BaseReadBookActivity(),
                     book.removeType(BookType.updateError)
                     ReadBook.book?.delete()
                     appDb.bookDao.insert(book)
+                    RemoteProgressBridge.scheduleSyncBookToQReadShelfIfEnabled(book)
                 }
                 startActivityForBook(book)
                 finish()

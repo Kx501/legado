@@ -116,4 +116,9 @@
         <item>自定义</item>
     </string-array>
 
+    <string-array name="remote_sync_mode_entries">
+        <item>WebDav</item>
+        <item>QRead</item>
+    </string-array>
+
 </resources>

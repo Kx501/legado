@@ -14,6 +14,7 @@ import io.legado.app.help.book.isLocal
 import io.legado.app.help.book.removeType
 import io.legado.app.help.config.AppConfig
 import io.legado.app.help.coroutine.Coroutine
+import io.legado.app.help.remote.RemoteProgressBridge
 import io.legado.app.model.localBook.LocalBook
 import io.legado.app.model.webBook.WebBook
 import io.legado.app.model.SourceCallBack
@@ -54,6 +55,8 @@ class BookshelfManageViewModel(application: Application) : BaseViewModel(applica
 
     fun deleteBook(books: List<Book>, deleteOriginal: Boolean = false) {
         execute {
+            val qreadUrls = books.filter { !it.isLocal }.map { it.bookUrl }.filter { it.isNotBlank() }
+            RemoteProgressBridge.scheduleDeleteBooksFromQReadShelfIfEnabled(qreadUrls)
             appDb.bookDao.delete(*books.toTypedArray())
             books.forEach {
                 if (it.isLocal) {
@@ -110,6 +113,7 @@ class BookshelfManageViewModel(application: Application) : BaseViewModel(applica
                         book.migrateTo(newBook, toc)
                         book.removeType(BookType.updateError)
                         appDb.bookDao.insert(newBook)
+                        RemoteProgressBridge.scheduleSyncBookToQReadShelfIfEnabled(newBook)
                         appDb.bookChapterDao.insert(*toc.toTypedArray())
                     }
                 delay(changeSourceDelay)

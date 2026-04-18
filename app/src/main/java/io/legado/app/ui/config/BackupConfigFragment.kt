@@ -16,7 +16,6 @@ import androidx.preference.ListPreference
 import androidx.preference.Preference
 import androidx.preference.PreferenceCategory
 import io.legado.app.constant.PreferKey.qreadBaseUrl
-import io.legado.app.constant.PreferKey.qreadInviteCode
 import io.legado.app.constant.PreferKey.qreadPassword
 import io.legado.app.constant.PreferKey.qreadToken
 import io.legado.app.constant.PreferKey.qreadUsername
@@ -72,6 +71,7 @@ class BackupConfigFragment : PreferenceFragment(),
     MenuProvider {
     companion object {
         private const val MODE_WEBDAV = "webdav"
+        private const val MODE_QREAD = "qread"
         private const val WEB_DAV_CONFIG_CATEGORY = "webDavConfigCategory"
         private const val QREAD_CONFIG_CATEGORY = "qreadConfigCategory"
         private const val QREAD_MODEL = "Legado-Android"
@@ -79,8 +79,6 @@ class BackupConfigFragment : PreferenceFragment(),
         private const val QREAD_PARAM_USERNAME = "username"
         private const val QREAD_PARAM_PASSWORD = "password"
         private const val QREAD_PARAM_MODEL = "model"
-        private const val QREAD_PARAM_CODE = "code"
-        private const val QREAD_PARAM_INVITE_CODE = "inviteCode"
         private val QREAD_API_VERSIONS = intArrayOf(5, 1)
     }
 
@@ -168,7 +166,6 @@ class BackupConfigFragment : PreferenceFragment(),
         upPreferenceSummary(qreadBaseUrl, getPrefString(qreadBaseUrl))
         upPreferenceSummary(qreadUsername, getPrefString(qreadUsername))
         upPreferenceSummary(qreadPassword, getPrefString(qreadPassword))
-        upPreferenceSummary(qreadInviteCode, getPrefString(qreadInviteCode))
         upPreferenceSummary(PreferKey.backupPath, getPrefString(PreferKey.backupPath))
         updateConfigCategoryVisibility(getPrefString(remoteSyncMode))
         findPreference<io.legado.app.lib.prefs.Preference>("web_dav_restore")
@@ -222,7 +219,6 @@ class BackupConfigFragment : PreferenceFragment(),
             qreadBaseUrl,
             qreadUsername,
             qreadPassword,
-            qreadInviteCode,
             qreadToken -> listView.post {
                 upPreferenceSummary(key, appCtx.getPrefString(key))
                 if (key == remoteSyncMode) {
@@ -305,7 +301,6 @@ class BackupConfigFragment : PreferenceFragment(),
         val baseUrl = appCtx.getPrefString(qreadBaseUrl)?.trim().orEmpty().trimEnd('/')
         val username = appCtx.getPrefString(qreadUsername)?.trim().orEmpty()
         val password = appCtx.getPrefString(qreadPassword)?.trim().orEmpty()
-        val inviteCode = appCtx.getPrefString(qreadInviteCode)?.trim().orEmpty()
         if (baseUrl.isBlank() || username.isBlank() || password.isBlank()) {
             appCtx.toastOnUi(R.string.qread_login_missing_required_fields)
             return
@@ -314,7 +309,7 @@ class BackupConfigFragment : PreferenceFragment(),
         waitDialog.show()
         lifecycleScope.launch(IO) {
             runCatching {
-                requestQReadToken(baseUrl, username, password, inviteCode)
+                requestQReadToken(baseUrl, username, password)
             }.mapCatching { token ->
                 // 同步必须使用本轮登录拿到的 token；prefs 中的 qreadToken 要等 onSuccess 才写入，否则会一直是 0
                 val syncedBookSourceCount = if (token.isNullOrBlank()) {
@@ -337,9 +332,7 @@ class BackupConfigFragment : PreferenceFragment(),
                         appCtx.putPrefString(qreadToken, token)
                         upPreferenceSummary(qreadToken, token)
                         lifecycleScope.launch(IO) {
-                            if (AppConfig.syncBookProgress &&
-                                AppConfig.remoteSyncMode.equals("qread", true)
-                            ) {
+                            if (AppConfig.remoteSyncMode.equals(MODE_QREAD, true) && AppConfig.syncBookProgress) {
                                 RemoteProgressBridge.downloadAllBookProgress()
                             }
                         }
@@ -369,22 +362,17 @@ class BackupConfigFragment : PreferenceFragment(),
     private fun requestQReadToken(
         baseUrl: String,
         username: String,
-        password: String,
-        inviteCode: String
+        password: String
     ): String? {
         var lastError: Throwable? = null
         QREAD_API_VERSIONS.forEach { version ->
             runCatching {
                 val loginUrl = "$baseUrl${QREAD_LOGIN_PATH_TEMPLATE.format(version)}"
-                val formBuilder = FormBody.Builder()
+                val body = FormBody.Builder()
                     .add(QREAD_PARAM_USERNAME, username)
                     .add(QREAD_PARAM_PASSWORD, password)
                     .add(QREAD_PARAM_MODEL, QREAD_MODEL)
-                if (inviteCode.isNotBlank()) {
-                    formBuilder.add(QREAD_PARAM_CODE, inviteCode)
-                    formBuilder.add(QREAD_PARAM_INVITE_CODE, inviteCode)
-                }
-                val body = formBuilder.build()
+                    .build()
                 val request = Request.Builder()
                     .url(loginUrl)
                     .post(body)

@@ -108,12 +108,6 @@
             android:title="@string/qread_password_t"
             app:iconSpaceReserved="false" />
 
-        <io.legado.app.lib.prefs.EditTextPreference
-            android:key="qreadInviteCode"
-            android:summary="@string/qread_invite_code_s"
-            android:title="@string/qread_invite_code_t"
-            app:iconSpaceReserved="false" />
-
         <io.legado.app.lib.prefs.Preference
             android:key="qreadLogin"
             android:summary="@string/qread_login_s"

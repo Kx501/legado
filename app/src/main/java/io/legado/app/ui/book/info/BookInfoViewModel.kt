@@ -30,6 +30,7 @@ import io.legado.app.help.book.isWebFile
 import io.legado.app.help.book.removeType
 import io.legado.app.help.book.updateTo
 import io.legado.app.help.coroutine.Coroutine
+import io.legado.app.help.remote.RemoteProgressBridge
 import io.legado.app.lib.webdav.ObjectNotFoundException
 import io.legado.app.model.AudioPlay
 import io.legado.app.model.BookCover
@@ -391,6 +392,7 @@ class BookInfoViewModel(application: Application) : BaseViewModel(application) {
                 book.removeType(BookType.updateError)
                 bookData.value?.delete()
                 appDb.bookDao.insert(book)
+                RemoteProgressBridge.scheduleSyncBookToQReadShelfIfEnabled(book)
                 appDb.bookChapterDao.insert(*toc.toTypedArray())
             }
             bookData.postValue(book)

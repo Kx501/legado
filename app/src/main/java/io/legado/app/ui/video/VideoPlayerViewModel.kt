@@ -9,6 +9,7 @@ import io.legado.app.constant.AppLog
 import io.legado.app.data.appDb
 import io.legado.app.data.entities.BookSource
 import io.legado.app.data.entities.RssSource
+import io.legado.app.help.remote.RemoteProgressBridge
 import io.legado.app.model.VideoPlay
 import io.legado.app.ui.login.SourceLoginJsExtensions
 import io.legado.app.utils.toastOnUi
@@ -18,6 +19,7 @@ class VideoPlayerViewModel(application: Application) : BaseViewModel(application
     fun removeFromBookshelf(success: (() -> Unit)?) {
         execute {
             VideoPlay.book?.let {
+                RemoteProgressBridge.scheduleDeleteBookFromQReadShelfIfEnabled(it)
                 appDb.bookDao.delete(it)
             }
         }.onSuccess {

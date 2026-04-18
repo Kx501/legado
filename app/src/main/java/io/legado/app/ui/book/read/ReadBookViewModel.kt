@@ -290,6 +290,7 @@ class ReadBookViewModel(application: Application) : BaseViewModel(application) {
             book.removeType(BookType.updateError)
             ReadBook.book?.delete()
             appDb.bookDao.insert(book)
+            RemoteProgressBridge.scheduleSyncBookToQReadShelfIfEnabled(book)
             appDb.bookChapterDao.insert(*toc.toTypedArray())
             ReadBook.resetData(book)
             ReadBook.upMsg(null)

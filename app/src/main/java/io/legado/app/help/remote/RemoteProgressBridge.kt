@@ -1,12 +1,14 @@
 package io.legado.app.help.remote
 
 import io.legado.app.constant.AppLog
+import io.legado.app.constant.BookType
 import io.legado.app.data.appDb
 import io.legado.app.data.entities.Book
 import io.legado.app.data.entities.BookSource
 import io.legado.app.data.entities.BookProgress
 import io.legado.app.data.entities.RssSource
 import io.legado.app.help.AppWebDav
+import io.legado.app.help.coroutine.Coroutine
 import io.legado.app.help.config.AppConfig
 import io.legado.app.help.http.okHttpClient
 import io.legado.app.utils.GSON
@@ -43,6 +45,8 @@ object RemoteProgressBridge {
     private const val QREAD_PATH_GET_BOOKSHELF = "/api/%d/getBookshelf"
     private const val QREAD_PATH_SAVE_BOOK_PROGRESS = "/api/%d/saveBookProgress"
     private const val QREAD_PATH_SAVE_BOOKS = "/api/%d/saveBooks"
+    /** BookController：按 bookUrl 列表批量删除云端书架 */
+    private const val QREAD_PATH_DELETE_BOOKS = "/api/%d/deleteBooks"
     /** ReadController：一次返回书源摘要列表（与轻阅读一致），再 POST getbookSourcejson 拉全文 */
     private const val QREAD_PATH_GET_BOOK_SOURCES_LIST = "/api/%d/getBookSources"
     private const val QREAD_PATH_GET_BOOK_SOURCE_JSON = "/api/%d/getbookSourcejson"
@@ -112,6 +116,120 @@ object RemoteProgressBridge {
             RemoteSyncMode.LOCAL_ONLY -> Unit
             RemoteSyncMode.WEBDAV -> AppWebDav.downloadAllBookProgress()
             RemoteSyncMode.QREAD -> downloadAllBookProgressQRead()
+        }
+    }
+
+    /**
+     * 将本地网络书逐本同步到 QRead 服务端书架（[addBookToQReadShelf] / saveBooks），
+     * 服务端已有同 bookUrl 或同名作者的记录会跳过。
+     * 仅建议在**备份恢复**等批量 `insert`、未走 [Book.save] 的场景调用；日常加删靠入架/删架钩子即可。
+     */
+    suspend fun uploadLocalShelfToQRead(): Int {
+        if (!AppConfig.remoteSyncMode.equals(MODE_QREAD, true)) return 0
+        val baseUrl = AppConfig.qreadBaseUrl.trimEnd('/')
+        val token = AppConfig.qreadToken
+        if (baseUrl.isBlank() || token.isBlank()) return 0
+        return try {
+            val remote = fetchBookProgressListQRead(baseUrl, token)
+            val remoteUrls =
+                remote.mapNotNull { it.bookUrl?.trim()?.takeIf { u -> u.isNotBlank() } }.toMutableSet()
+            val remoteNameAuthor = remote.map { it.name to it.author }.toMutableSet()
+            var added = 0
+            for (book in appDb.bookDao.webBooks) {
+                currentCoroutineContext().ensureActive()
+                if (book.bookUrl.isBlank() || book.name.isBlank()) continue
+                if (book.bookUrl in remoteUrls || (book.name to book.author) in remoteNameAuthor) continue
+                if (addBookToQReadShelf(baseUrl, token, book)) {
+                    added++
+                    remoteUrls.add(book.bookUrl)
+                    remoteNameAuthor.add(book.name to book.author)
+                }
+            }
+            added
+        } catch (e: Exception) {
+            currentCoroutineContext().ensureActive()
+            AppLog.put("QRead上传书架异常\n${e.localizedMessage}", e)
+            0
+        }
+    }
+
+    /**
+     * 新加入书架的网络书：在 QRead 模式下异步尝试 [ensureBookOnQReadShelf]（不阻塞调用线程）。
+     */
+    fun scheduleSyncBookToQReadShelfIfEnabled(book: Book) {
+        Coroutine.async {
+            syncBookToQReadShelfIfEnabled(book)
+            Unit
+        }
+    }
+
+    suspend fun syncBookToQReadShelfIfEnabled(book: Book) {
+        if (!AppConfig.remoteSyncMode.equals(MODE_QREAD, true)) return
+        if (book.bookUrl.isBlank() || book.name.isBlank()) return
+        if ((book.type and BookType.local) != 0) return
+        val baseUrl = AppConfig.qreadBaseUrl.trimEnd('/')
+        val token = AppConfig.qreadToken
+        if (baseUrl.isBlank() || token.isBlank()) return
+        try {
+            ensureBookOnQReadShelf(baseUrl, token, book)
+        } catch (e: Exception) {
+            currentCoroutineContext().ensureActive()
+            AppLog.put("QRead单本入架异常 bookUrl=${book.bookUrl}\n${e.localizedMessage}", e)
+        }
+    }
+
+    fun scheduleDeleteBooksFromQReadShelfIfEnabled(bookUrls: List<String>) {
+        val urls = bookUrls.map { it.trim() }.filter { it.isNotBlank() }.distinct()
+        if (urls.isEmpty()) return
+        Coroutine.async {
+            deleteBooksFromQReadShelfIfEnabled(urls)
+            Unit
+        }
+    }
+
+    fun scheduleDeleteBookFromQReadShelfIfEnabled(book: Book) {
+        if ((book.type and BookType.local) != 0) return
+        if (book.bookUrl.isBlank()) return
+        scheduleDeleteBooksFromQReadShelfIfEnabled(listOf(book.bookUrl))
+    }
+
+    suspend fun deleteBooksFromQReadShelfIfEnabled(bookUrls: List<String>) {
+        if (!AppConfig.remoteSyncMode.equals(MODE_QREAD, true)) return
+        val urls = bookUrls.map { it.trim() }.filter { it.isNotBlank() }.distinct()
+        if (urls.isEmpty()) return
+        val baseUrl = AppConfig.qreadBaseUrl.trimEnd('/')
+        val token = AppConfig.qreadToken
+        if (baseUrl.isBlank() || token.isBlank()) return
+        try {
+            val body = JSONArray(urls).toString().toRequestBody(QREAD_CONTENT_TYPE_JSON.toMediaType())
+            for (version in QREAD_API_VERSIONS) {
+                val requestUrl = "$baseUrl${QREAD_PATH_DELETE_BOOKS.format(version)}".toHttpUrl()
+                    .newBuilder()
+                    .addQueryParameter(PARAM_ACCESS_TOKEN, token)
+                    .build()
+                val request = Request.Builder().url(requestUrl).post(body).build()
+                val ok = okHttpClient.newCall(request).execute().use { response ->
+                    if (!response.isSuccessful) {
+                        AppLog.put("$LOG_QREAD_PREFIX deleteBooks HTTP ${response.code}, v=$version")
+                        return@use false
+                    }
+                    val payload = response.body.string()
+                    val root = runCatching { JSONObject(payload) }.getOrNull() ?: return@use false
+                    if (root.optBoolean(QREAD_IS_SUCCESS, false)) {
+                        return@use true
+                    }
+                    AppLog.put(
+                        "$LOG_QREAD_PREFIX deleteBooks isSuccess=false, v=$version, error=${
+                            root.optString(QREAD_ERROR_MSG)
+                        }"
+                    )
+                    false
+                }
+                if (ok) break
+            }
+        } catch (e: Exception) {
+            currentCoroutineContext().ensureActive()
+            AppLog.put("QRead云端删书异常\n${e.localizedMessage}", e)
         }
     }
 

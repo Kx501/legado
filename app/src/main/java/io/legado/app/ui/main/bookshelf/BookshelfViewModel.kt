@@ -17,6 +17,7 @@ import io.legado.app.help.http.decompressed
 import io.legado.app.help.http.newCallResponseBody
 import io.legado.app.help.http.okHttpClient
 import io.legado.app.help.http.text
+import io.legado.app.help.remote.RemoteProgressBridge
 import io.legado.app.model.analyzeRule.AnalyzeUrl
 import io.legado.app.model.webBook.WebBook
 import io.legado.app.utils.FileUtils
@@ -99,6 +100,7 @@ class BookshelfViewModel(application: Application) : BaseViewModel(application) 
                         val toc = WebBook.getChapterListAwait(bookSource, it).getOrThrow()
                         dbBook.migrateTo(it, toc)
                         appDb.bookDao.insert(it)
+                        RemoteProgressBridge.scheduleSyncBookToQReadShelfIfEnabled(it)
                         appDb.bookChapterDao.insert(*toc.toTypedArray())
                     } else {
                         it.order = appDb.bookDao.minOrder - 1

@@ -185,7 +185,6 @@ object PreferKey {
     const val qreadBaseUrl = "qreadBaseUrl"
     const val qreadUsername = "qreadUsername"
     const val qreadPassword = "qreadPassword"
-    const val qreadInviteCode = "qreadInviteCode"
     const val qreadToken = "qreadToken"
 
     const val dThemeName = "durThemeName"

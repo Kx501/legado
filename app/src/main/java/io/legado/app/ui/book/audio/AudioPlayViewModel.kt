@@ -13,6 +13,7 @@ import io.legado.app.data.entities.Book
 import io.legado.app.data.entities.BookChapter
 import io.legado.app.data.entities.BookSource
 import io.legado.app.help.book.getBookSource
+import io.legado.app.help.remote.RemoteProgressBridge
 import io.legado.app.help.book.removeType
 import io.legado.app.help.book.simulatedTotalChapterNum
 import io.legado.app.model.AudioPlay
@@ -31,7 +32,10 @@ class AudioPlayViewModel(application: Application) : BaseViewModel(application) 
             val bookUrl = intent.getStringExtra("bookUrl") ?: book?.bookUrl ?: return@execute
             val targetBook = appDb.bookDao.getBook(bookUrl) ?: run {
                 inBookshelf = false
-                book?.also { appDb.bookDao.insert(it) } ?: return@execute
+                book?.also {
+                    appDb.bookDao.insert(it)
+                    RemoteProgressBridge.scheduleSyncBookToQReadShelfIfEnabled(it)
+                } ?: return@execute
             }
             initBook(targetBook)
         }.onSuccess {
@@ -107,6 +111,7 @@ class AudioPlayViewModel(application: Application) : BaseViewModel(application) 
             book.removeType(BookType.updateError)
             AudioPlay.book?.delete()
             appDb.bookDao.insert(book)
+            RemoteProgressBridge.scheduleSyncBookToQReadShelfIfEnabled(book)
             AudioPlay.book = book
             AudioPlay.bookSource = source
             appDb.bookChapterDao.insert(*toc.toTypedArray())
@@ -119,6 +124,7 @@ class AudioPlayViewModel(application: Application) : BaseViewModel(application) 
     fun removeFromBookshelf(success: (() -> Unit)?) {
         execute {
             AudioPlay.book?.let {
+                RemoteProgressBridge.scheduleDeleteBookFromQReadShelfIfEnabled(it)
                 appDb.bookDao.delete(it)
             }
         }.onSuccess {

@@ -23,6 +23,7 @@ import io.legado.app.databinding.ActivityAudioPlayBinding
 import io.legado.app.help.book.isAudio
 import io.legado.app.help.book.removeType
 import io.legado.app.help.config.AppConfig
+import io.legado.app.help.remote.RemoteProgressBridge
 import io.legado.app.lib.dialogs.alert
 import io.legado.app.model.AudioPlay
 import io.legado.app.model.BookCover
@@ -317,6 +318,7 @@ class AudioPlayActivity :
                     book.removeType(BookType.updateError)
                     AudioPlay.book?.delete()
                     appDb.bookDao.insert(book)
+                    RemoteProgressBridge.scheduleSyncBookToQReadShelfIfEnabled(book)
                 }
                 startActivityForBook(book)
                 finish()
