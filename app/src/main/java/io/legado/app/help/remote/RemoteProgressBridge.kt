@@ -243,17 +243,24 @@ object RemoteProgressBridge {
 
     private fun qreadWebSocketUrl(baseUrl: String, token: String): String? {
         val httpUrl = runCatching { baseUrl.toHttpUrl() }.getOrNull() ?: return null
-        val scheme = when (httpUrl.scheme.lowercase()) {
-            "https" -> "wss"
-            "http" -> "ws"
+        // OkHttp 的 HttpUrl.Builder 仅允许 http/https，不能直接设为 ws/wss
+        val wsScheme = when (httpUrl.scheme.lowercase()) {
+            "https", "wss" -> "wss"
+            "http", "ws" -> "ws"
             else -> return null
         }
-        return httpUrl.newBuilder()
-            .scheme(scheme)
+        val builderScheme = if (wsScheme == "wss") "https" else "http"
+        val built = httpUrl.newBuilder()
+            .scheme(builderScheme)
             .encodedPath(QREAD_PATH_WS.format(QREAD_API_VERSIONS.first()))
             .setQueryParameter("id", token)
             .build()
             .toString()
+        return built.replaceFirst(
+            "${builderScheme}://",
+            "${wsScheme}://",
+            ignoreCase = true
+        )
     }
 
     private fun handleQReadPushMessage(text: String) {
