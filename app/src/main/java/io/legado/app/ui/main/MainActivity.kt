@@ -313,6 +313,9 @@ class MainActivity : VMBaseActivity<ActivityMainBinding, MainViewModel>(),
         if (!AppConfig.autoCheckNewBackup) {
             return
         }
+        if (!AppConfig.remoteSyncMode.equals("webdav", ignoreCase = true)) {
+            return
+        }
         lifecycleScope.launch {
             val lastBackupFile =
                 withContext(IO) { AppWebDav.lastBackUp().getOrNull() } ?: return@launch

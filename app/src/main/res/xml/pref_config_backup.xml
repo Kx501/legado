@@ -83,6 +83,55 @@
     </io.legado.app.lib.prefs.PreferenceCategory>
 
     <io.legado.app.lib.prefs.PreferenceCategory
+        android:key="webDavBackupCategory"
+        android:title="@string/webdav_backup_section"
+        app:allowDividerAbove="false"
+        app:allowDividerBelow="false"
+        app:iconSpaceReserved="false"
+        app:layout="@layout/view_preference_category">
+
+        <io.legado.app.lib.prefs.Preference
+            android:key="backupUri"
+            android:order="0"
+            android:summary="@string/select_backup_path"
+            android:title="@string/backup_path"
+            app:iconSpaceReserved="false" />
+
+        <io.legado.app.lib.prefs.Preference
+            android:key="web_dav_backup"
+            android:order="1"
+            android:summary="@string/backup_summary"
+            android:title="@string/backup"
+            app:iconSpaceReserved="false" />
+
+        <io.legado.app.lib.prefs.Preference
+            android:key="web_dav_restore"
+            android:order="2"
+            android:summary="@string/restore_summary"
+            android:title="@string/restore"
+            app:iconSpaceReserved="false" />
+
+        <io.legado.app.lib.prefs.SwitchPreference
+            android:defaultValue="true"
+            android:key="onlyLatestBackup"
+            android:order="3"
+            android:summary="@string/only_latest_backup_s"
+            android:title="@string/only_latest_backup_t"
+            app:iconSpaceReserved="false" />
+
+        <io.legado.app.lib.prefs.SwitchPreference
+            android:defaultValue="true"
+            android:key="autoCheckNewBackup"
+            android:order="4"
+            android:summary="@string/auto_check_new_backup_s"
+            android:title="@string/auto_check_new_backup_t"
+            app:allowDividerAbove="false"
+            app:allowDividerBelow="false"
+            app:iconSpaceReserved="false" />
+
+    </io.legado.app.lib.prefs.PreferenceCategory>
+
+    <io.legado.app.lib.prefs.PreferenceCategory
         android:key="qreadConfigCategory"
         android:title="@string/qread_config_set"
         app:allowDividerAbove="false"
@@ -119,28 +168,35 @@
     </io.legado.app.lib.prefs.PreferenceCategory>
 
     <io.legado.app.lib.prefs.PreferenceCategory
-        android:title="@string/backup_restore"
+        android:key="qreadLocalBackupCategory"
+        android:title="@string/qread_local_backup_section"
+        app:allowDividerAbove="false"
         app:allowDividerBelow="false"
         app:iconSpaceReserved="false"
         app:layout="@layout/view_preference_category">
 
         <io.legado.app.lib.prefs.Preference
-            android:key="backupUri"
-            android:summary="@string/select_backup_path"
-            android:title="@string/backup_path"
+            android:key="localBackup"
+            android:order="1"
+            android:summary="@string/qread_local_backup_s"
+            android:title="@string/qread_local_backup_t"
             app:iconSpaceReserved="false" />
 
         <io.legado.app.lib.prefs.Preference
-            android:key="web_dav_backup"
-            android:summary="@string/backup_summary"
-            android:title="@string/backup"
+            android:key="localRestore"
+            android:order="2"
+            android:summary="@string/qread_local_restore_s"
+            android:title="@string/qread_local_restore_t"
             app:iconSpaceReserved="false" />
 
-        <io.legado.app.lib.prefs.Preference
-            android:key="web_dav_restore"
-            android:summary="@string/restore_summary"
-            android:title="@string/restore"
-            app:iconSpaceReserved="false" />
+    </io.legado.app.lib.prefs.PreferenceCategory>
+
+    <io.legado.app.lib.prefs.PreferenceCategory
+        android:key="backupCommonCategory"
+        android:title="@string/backup_common_section"
+        app:allowDividerBelow="false"
+        app:iconSpaceReserved="false"
+        app:layout="@layout/view_preference_category">
 
         <io.legado.app.lib.prefs.Preference
             android:key="restoreIgnore"
@@ -152,22 +208,6 @@
             android:key="import_old"
             android:summary="@string/import_old_summary"
             android:title="@string/menu_import_old_version"
-            app:iconSpaceReserved="false" />
-
-        <io.legado.app.lib.prefs.SwitchPreference
-            android:defaultValue="true"
-            android:key="onlyLatestBackup"
-            android:summary="@string/only_latest_backup_s"
-            android:title="@string/only_latest_backup_t"
-            app:iconSpaceReserved="false" />
-
-        <io.legado.app.lib.prefs.SwitchPreference
-            android:defaultValue="true"
-            android:key="autoCheckNewBackup"
-            android:summary="@string/auto_check_new_backup_s"
-            android:title="@string/auto_check_new_backup_t"
-            app:allowDividerAbove="false"
-            app:allowDividerBelow="false"
             app:iconSpaceReserved="false" />
 
     </io.legado.app.lib.prefs.PreferenceCategory>

@@ -26,8 +26,6 @@ import io.legado.app.data.entities.SearchKeyword
 import io.legado.app.data.entities.Server
 import io.legado.app.data.entities.TxtTocRule
 import io.legado.app.help.DirectLinkUpload
-import io.legado.app.help.config.AppConfig
-import io.legado.app.help.remote.RemoteProgressBridge
 import io.legado.app.help.LauncherIconHelp
 import io.legado.app.help.book.isLocal
 import io.legado.app.help.book.upType
@@ -52,7 +50,6 @@ import io.legado.app.utils.isContentScheme
 import io.legado.app.utils.isJsonArray
 import io.legado.app.utils.openInputStream
 import io.legado.app.utils.toastOnUi
-import kotlinx.coroutines.Dispatchers.IO
 import kotlinx.coroutines.Dispatchers.Main
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.sync.Mutex
@@ -300,11 +297,6 @@ object Restore {
             hideStatusBar = appCtx.getPrefBoolean(PreferKey.hideStatusBar)
             hideNavigationBar = appCtx.getPrefBoolean(PreferKey.hideNavigationBar)
             autoReadSpeed = appCtx.getPrefInt(PreferKey.autoReadSpeed, 46)
-        }
-        if (AppConfig.remoteSyncMode.equals("qread", true)) {
-            withContext(IO) {
-                RemoteProgressBridge.uploadLocalShelfToQRead()
-            }
         }
         appCtx.toastOnUi(R.string.restore_success)
         withContext(Main) {

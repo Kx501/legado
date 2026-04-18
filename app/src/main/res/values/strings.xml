@@ -113,6 +113,13 @@
     <string name="pt_auto_download">Auto-download</string>
     <string name="ps_auto_download">Download the latest chapters automatically  when updating books</string>
     <string name="backup_restore">Service and data</string>
+    <string name="webdav_backup_section">WebDAV backup</string>
+    <string name="qread_local_backup_section">Local backup</string>
+    <string name="qread_local_backup_t">Backup</string>
+    <string name="qread_local_backup_s">Export a ZIP to the selected folder (offline copy)</string>
+    <string name="qread_local_restore_t">Restore from local file</string>
+    <string name="qread_local_restore_s">Pick a ZIP backup file</string>
+    <string name="backup_common_section">More</string>
     <string name="web_dav_set">WebDav settings</string>
     <string name="qread_config_set">Server settings</string>
     <string name="remote_sync_set">Sync settings</string>

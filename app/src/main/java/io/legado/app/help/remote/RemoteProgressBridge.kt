@@ -2,6 +2,7 @@ package io.legado.app.help.remote
 
 import io.legado.app.constant.AppLog
 import io.legado.app.constant.BookType
+import io.legado.app.constant.PreferKey
 import io.legado.app.data.appDb
 import io.legado.app.data.entities.Book
 import io.legado.app.data.entities.BookSource
@@ -14,6 +15,8 @@ import io.legado.app.help.http.okHttpClient
 import io.legado.app.utils.GSON
 import io.legado.app.utils.fromJsonArray
 import io.legado.app.utils.fromJsonObject
+import io.legado.app.utils.getPrefStringSet
+import io.legado.app.utils.putPrefStringSet
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.ensureActive
@@ -25,6 +28,7 @@ import okhttp3.Request
 import okhttp3.RequestBody.Companion.toRequestBody
 import org.json.JSONArray
 import org.json.JSONObject
+import splitties.init.appCtx
 
 private enum class RemoteSyncMode(val value: String) {
     LOCAL_ONLY("local"),
@@ -44,7 +48,6 @@ private enum class RemoteSyncMode(val value: String) {
 object RemoteProgressBridge {
     private const val QREAD_CLIENT_VERSION = "3.1.0"
     private val QREAD_API_VERSIONS = intArrayOf(5, 1)
-    private const val QREAD_SYNC_GROUP_TAG = "QRead"
     private const val QREAD_PATH_GET_BOOKSHELF = "/api/%d/getBookshelf"
     private const val QREAD_PATH_SAVE_BOOK_PROGRESS = "/api/%d/saveBookProgress"
     private const val QREAD_PATH_SAVE_BOOKS = "/api/%d/saveBooks"
@@ -256,23 +259,24 @@ object RemoteProgressBridge {
         if (baseUrl.isBlank() || token.isBlank()) return 0
         return withContext(Dispatchers.IO) {
             try {
-                val sourceJson = fetchBookSourceJsonQRead(baseUrl, token)
-                if (sourceJson.isBlank()) return@withContext 0
-                val sources = GSON.fromJsonArray<BookSource>(sourceJson).getOrNull() ?: emptyList()
+                val sources = fetchBookSourcesQRead(baseUrl, token)
                 if (sources.isEmpty()) return@withContext 0
                 val remoteUrls = sources.mapNotNull { it.bookSourceUrl.trim().takeIf { u -> u.isNotBlank() } }.toSet()
-                sources.forEach { it.addGroup(QREAD_SYNC_GROUP_TAG) }
                 appDb.bookSourceDao.insert(*sources.toTypedArray())
-                // 服务端删除：仅清理带 QRead 分组标记的条目，避免误删用户本地自建书源
-                if (remoteUrls.isNotEmpty()) {
-                    val localQReadSources = appDb.bookSourceDao.getByGroup(QREAD_SYNC_GROUP_TAG)
-                    localQReadSources
+                // 服务端删除：仅清理“历史由 QRead 同步过”的 URL，避免改动书源分组字段
+                val lastManagedUrls = appCtx
+                    .getPrefStringSet(PreferKey.qreadManagedBookSourceUrls, mutableSetOf())
+                    ?.toSet()
+                    ?: emptySet()
+                if (lastManagedUrls.isNotEmpty()) {
+                    lastManagedUrls
                         .asSequence()
-                        .map { it.bookSourceUrl.trim() }
+                        .map { it.trim() }
                         .filter { it.isNotBlank() && it !in remoteUrls }
                         .distinct()
                         .forEach { appDb.bookSourceDao.delete(it) }
                 }
+                appCtx.putPrefStringSet(PreferKey.qreadManagedBookSourceUrls, remoteUrls.toMutableSet())
                 sources.size
             } catch (e: Exception) {
                 currentCoroutineContext().ensureActive()
@@ -280,6 +284,30 @@ object RemoteProgressBridge {
                 0
             }
         }
+    }
+
+    private suspend fun fetchBookSourcesQRead(baseUrl: String, token: String): List<BookSource> {
+        QREAD_API_VERSIONS.forEach { version ->
+            val summaries = fetchBookSourceSummariesFromReadApi(baseUrl, token, version)
+            if (summaries.isEmpty()) return@forEach
+            val payload = fetchBookSourceJsonPayloadQRead(
+                baseUrl = baseUrl,
+                token = token,
+                version = version,
+                ids = summaries.map { it.bookSourceUrl }
+            ) ?: return@forEach
+            val sources = GSON.fromJsonArray<BookSource>(payload).getOrNull() ?: emptyList()
+            if (sources.isEmpty()) return@forEach
+            val summaryMap = summaries.associateBy { it.bookSourceUrl }
+            sources.forEach { source ->
+                val summary = summaryMap[source.bookSourceUrl] ?: return@forEach
+                source.enabled = summary.enabled
+                source.enabledExplore = summary.enabledExplore
+                source.bookSourceGroup = summary.bookSourceGroup
+            }
+            return sources
+        }
+        return emptyList()
     }
 
     suspend fun syncRssSourcesFromQRead(accessToken: String? = null): Int {
@@ -296,21 +324,24 @@ object RemoteProgressBridge {
                     val source = fetchRssSourceDetailQRead(baseUrl, token, summary.sourceUrl) ?: return@forEach
                     source.enabled = summary.enabled
                     source.sourceGroup = summary.sourceGroup
-                    source.addGroup(QREAD_SYNC_GROUP_TAG)
                     rssSources.add(source)
                 }
                 if (rssSources.isEmpty()) return@withContext 0
                 appDb.rssSourceDao.insert(*rssSources.toTypedArray())
-                // 服务端删除：仅清理带 QRead 分组标记的条目，避免误删用户本地自建订阅源
-                if (remoteUrls.isNotEmpty()) {
-                    val localQReadSources = appDb.rssSourceDao.getByGroup(QREAD_SYNC_GROUP_TAG)
-                    localQReadSources
+                // 服务端删除：仅清理“历史由 QRead 同步过”的 URL，避免改动订阅源分组字段
+                val lastManagedUrls = appCtx
+                    .getPrefStringSet(PreferKey.qreadManagedRssSourceUrls, mutableSetOf())
+                    ?.toSet()
+                    ?: emptySet()
+                if (lastManagedUrls.isNotEmpty()) {
+                    lastManagedUrls
                         .asSequence()
-                        .map { it.sourceUrl.trim() }
+                        .map { it.trim() }
                         .filter { it.isNotBlank() && it !in remoteUrls }
                         .distinct()
                         .forEach { appDb.rssSourceDao.delete(it) }
                 }
+                appCtx.putPrefStringSet(PreferKey.qreadManagedRssSourceUrls, remoteUrls.toMutableSet())
                 rssSources.size
             } catch (e: Exception) {
                 currentCoroutineContext().ensureActive()
@@ -458,25 +489,15 @@ object RemoteProgressBridge {
         return false
     }
 
-    private suspend fun fetchBookSourceJsonQRead(baseUrl: String, token: String): String {
-        QREAD_API_VERSIONS.forEach { version ->
-            val ids = fetchBookSourceIdsFromReadApi(baseUrl, token, version)
-            if (ids.isEmpty()) return@forEach
-            val payload = fetchBookSourceJsonPayloadQRead(baseUrl, token, version, ids)
-            if (!payload.isNullOrBlank()) return payload
-        }
-        return ""
-    }
-
     /**
-     * 使用 [ReadController.getBookSources] 拉取书源 URL 列表（与轻阅读一致），
-     * 避免依赖 [SourceController.getBookSourcesNew] 等分页缓存接口（服务端曾返回 false）。
+     * 使用 [ReadController.getBookSources] 拉取书源摘要，
+     * 其中 enabled/enabledExplore/bookSourceGroup 以摘要返回为准。
      */
-    private fun fetchBookSourceIdsFromReadApi(
+    private fun fetchBookSourceSummariesFromReadApi(
         baseUrl: String,
         token: String,
         version: Int
-    ): List<String> {
+    ): List<QReadBookSourceSummary> {
         val requestUrl = "$baseUrl${QREAD_PATH_GET_BOOK_SOURCES_LIST.format(version)}".toHttpUrl()
             .newBuilder()
             .addQueryParameter(PARAM_ACCESS_TOKEN, token)
@@ -499,13 +520,19 @@ object RemoteProgressBridge {
                 return@use emptyList()
             }
             val data = root.optJSONArray(QREAD_DATA) ?: return@use emptyList()
-            val ids = linkedSetOf<String>()
+            val list = linkedMapOf<String, QReadBookSourceSummary>()
             for (i in 0 until data.length()) {
                 val item = data.optJSONObject(i) ?: continue
-                val id = item.optString(QREAD_BOOK_SOURCE_URL).orEmpty()
-                if (id.isNotBlank()) ids.add(id)
+                val url = item.optString(QREAD_BOOK_SOURCE_URL).orEmpty().trim()
+                if (url.isBlank()) continue
+                list[url] = QReadBookSourceSummary(
+                    bookSourceUrl = url,
+                    enabled = item.optBoolean(QREAD_ENABLED, true),
+                    enabledExplore = item.optBoolean("enabledExplore", true),
+                    bookSourceGroup = item.optString("bookSourceGroup").ifBlank { null }
+                )
             }
-            ids.toList()
+            list.values.toList()
         }
     }
 
@@ -750,6 +777,13 @@ private data class QReadRssSourceSummary(
     val sourceUrl: String,
     val sourceGroup: String?,
     val enabled: Boolean
+)
+
+private data class QReadBookSourceSummary(
+    val bookSourceUrl: String,
+    val enabled: Boolean,
+    val enabledExplore: Boolean,
+    val bookSourceGroup: String?
 )
 
 private data class QReadBookProgressPayload(

@@ -110,11 +110,15 @@ object Backup {
             Coroutine.async {
                 mutex.withLock {
                     if (shouldBackup()) {
-                        val backupZipFileName = getNowZipFileName()
-                        if (!AppWebDav.hasBackUp(backupZipFileName)) {
-                            backup(context, AppConfig.backupPath)
+                        if (AppConfig.remoteSyncMode.equals("webdav", ignoreCase = true)) {
+                            val backupZipFileName = getNowZipFileName()
+                            if (!AppWebDav.hasBackUp(backupZipFileName)) {
+                                backup(context, AppConfig.backupPath)
+                            } else {
+                                LocalConfig.lastBackup = System.currentTimeMillis()
+                            }
                         } else {
-                            LocalConfig.lastBackup = System.currentTimeMillis()
+                            backup(context, AppConfig.backupPath)
                         }
                     }
                 }
@@ -245,23 +249,27 @@ object Backup {
                     copyBackup(File(path), backupFileName)
                 }
             }
-            try {
-                AppWebDav.backUpWebDav(zipFileName)
-            } catch (e: Exception) {
-                AppLog.put("上传备份至webdav失败\n$e", e)
+            if (AppConfig.remoteSyncMode.equals("webdav", ignoreCase = true)) {
+                try {
+                    AppWebDav.backUpWebDav(zipFileName)
+                } catch (e: Exception) {
+                    AppLog.put("上传备份至webdav失败\n$e", e)
+                }
             }
         }
         FileUtils.delete(backupPath)
         FileUtils.delete(zipFilePath)
         currentCoroutineContext().ensureActive()
-        ReadBookConfig.getAllPicBgStr().map {
-            if (it.contains(File.separator)) {
-                File(it)
-            } else {
-                appCtx.externalFiles.getFile("bg", it)
+        if (AppConfig.remoteSyncMode.equals("webdav", ignoreCase = true)) {
+            ReadBookConfig.getAllPicBgStr().map {
+                if (it.contains(File.separator)) {
+                    File(it)
+                } else {
+                    appCtx.externalFiles.getFile("bg", it)
+                }
+            }.let {
+                AppWebDav.upBgs(it.toTypedArray())
             }
-        }.let {
-            AppWebDav.upBgs(it.toTypedArray())
         }
     }
 

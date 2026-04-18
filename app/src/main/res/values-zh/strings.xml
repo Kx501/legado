@@ -112,6 +112,13 @@
     <string name="pt_auto_download">自动下载最新章节</string>
     <string name="ps_auto_download">更新书籍时自动下载最新章节</string>
     <string name="backup_restore">服务器与数据</string>
+    <string name="webdav_backup_section">WebDAV 备份</string>
+    <string name="qread_local_backup_section">本地备份</string>
+    <string name="qread_local_backup_t">备份</string>
+    <string name="qread_local_backup_s">将数据导出为 ZIP 到所选目录（离线副本）</string>
+    <string name="qread_local_restore_t">从本地文件恢复</string>
+    <string name="qread_local_restore_s">选择 ZIP 备份文件</string>
+    <string name="backup_common_section">其它</string>
     <string name="web_dav_set">WebDav 设置</string>
     <string name="qread_config_set">服务器设置</string>
     <string name="service_data_setting_s">中心服务器、WebDav 与备份恢复</string>

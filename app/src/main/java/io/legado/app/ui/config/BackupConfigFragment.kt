@@ -15,6 +15,7 @@ import androidx.preference.EditTextPreference
 import androidx.preference.ListPreference
 import androidx.preference.Preference
 import androidx.preference.PreferenceCategory
+import androidx.preference.PreferenceGroup
 import io.legado.app.constant.PreferKey.qreadBaseUrl
 import io.legado.app.constant.PreferKey.qreadPassword
 import io.legado.app.constant.PreferKey.qreadToken
@@ -73,7 +74,9 @@ class BackupConfigFragment : PreferenceFragment(),
         private const val MODE_WEBDAV = "webdav"
         private const val MODE_QREAD = "qread"
         private const val WEB_DAV_CONFIG_CATEGORY = "webDavConfigCategory"
+        private const val WEB_DAV_BACKUP_CATEGORY = "webDavBackupCategory"
         private const val QREAD_CONFIG_CATEGORY = "qreadConfigCategory"
+        private const val QREAD_LOCAL_BACKUP_CATEGORY = "qreadLocalBackupCategory"
         private const val QREAD_MODEL = "Legado-Android"
         private const val QREAD_LOGIN_PATH_TEMPLATE = "/api/%d/login"
         private const val QREAD_PARAM_USERNAME = "username"
@@ -296,7 +299,27 @@ class BackupConfigFragment : PreferenceFragment(),
     private fun updateConfigCategoryVisibility(mode: String?) {
         val isWebDavMode = mode.equals(MODE_WEBDAV, ignoreCase = true)
         findPreference<PreferenceCategory>(WEB_DAV_CONFIG_CATEGORY)?.isVisible = isWebDavMode
+        findPreference<PreferenceCategory>(WEB_DAV_BACKUP_CATEGORY)?.isVisible = isWebDavMode
         findPreference<PreferenceCategory>(QREAD_CONFIG_CATEGORY)?.isVisible = !isWebDavMode
+        findPreference<PreferenceCategory>(QREAD_LOCAL_BACKUP_CATEGORY)?.isVisible = !isWebDavMode
+        moveBackupPathPreference(isWebDavMode)
+    }
+
+    private fun moveBackupPathPreference(isWebDavMode: Boolean) {
+        val pref = findPreference<Preference>(PreferKey.backupPath) ?: return
+        val target = if (isWebDavMode) {
+            findPreference<PreferenceCategory>(WEB_DAV_BACKUP_CATEGORY)
+        } else {
+            findPreference<PreferenceCategory>(QREAD_LOCAL_BACKUP_CATEGORY)
+        } ?: return
+        val parent = pref.parent as? PreferenceGroup
+        if (parent == target) {
+            pref.order = 0
+            return
+        }
+        parent?.removePreference(pref)
+        target.addPreference(pref)
+        pref.order = 0
     }
 
     override fun onPreferenceTreeClick(preference: Preference): Boolean {
@@ -305,6 +328,8 @@ class BackupConfigFragment : PreferenceFragment(),
             PreferKey.restoreIgnore -> backupIgnore()
             "web_dav_backup" -> backup()
             "web_dav_restore" -> restore()
+            PreferKey.localBackup -> backup()
+            PreferKey.localRestore -> restoreFromLocal()
             "import_old" -> restoreOld.launch()
             "qreadLogin" -> loginQRead()
         }
