@@ -262,6 +262,20 @@ class BackupConfigFragment : PreferenceFragment(),
                     preference.summary = "*".repeat(value.length)
                 }
 
+            qreadBaseUrl ->
+                if (value.isNullOrBlank()) {
+                    preference.summary = getString(R.string.qread_base_url_s)
+                } else {
+                    preference.summary = value
+                }
+
+            qreadUsername ->
+                if (value.isNullOrBlank()) {
+                    preference.summary = getString(R.string.qread_username_s)
+                } else {
+                    preference.summary = value
+                }
+
             PreferKey.webDavDir -> preference.summary = when (value) {
                 null -> "legado"
                 else -> value
