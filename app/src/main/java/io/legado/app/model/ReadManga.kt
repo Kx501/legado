@@ -343,6 +343,9 @@ object ReadManga : CoroutineScope by MainScope() {
                         )
                     }
                 }
+                if (chapterChanged) {
+                    RemoteProgressBridge.scheduleUploadOnChapterChanged(BookProgress(book))
+                }
                 appDb.bookDao.update(book)
             }.onFailure {
                 AppLog.put("保存漫画阅读进度信息出错\n$it", it)

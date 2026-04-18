@@ -108,7 +108,6 @@ import io.legado.app.ui.widget.dialog.PhotoDialog
 import io.legado.app.utils.ACache
 import io.legado.app.utils.Debounce
 import io.legado.app.utils.LogUtils
-import io.legado.app.utils.NetworkUtils
 import io.legado.app.utils.StartActivityContract
 import io.legado.app.utils.applyOpenTint
 import io.legado.app.utils.buildMainHandler
@@ -363,12 +362,7 @@ class ReadBookActivity : BaseReadBookActivity(),
         screenOffTimerStart()
         // 网络监听，当从无网切换到网络环境时同步进度（注意注册的同时就会收到监听，因此界面激活时无需重复执行同步操作）
         networkChangedListener.register()
-        networkChangedListener.onNetworkChanged = {
-            // 当网络是可用状态且无需初始化时同步进度（初始化中已有同步进度逻辑）
-            if (AppConfig.syncBookProgressPlus && NetworkUtils.isAvailable() && !justInitData && ReadBook.inBookshelf) {
-                ReadBook.syncProgress({ progress -> sureNewProgress(progress) })
-            }
-        }
+        networkChangedListener.onNetworkChanged = {}
     }
 
     override fun onPause() {
@@ -379,13 +373,6 @@ class ReadBookActivity : BaseReadBookActivity(),
         ReadBook.cancelPreDownloadTask()
         unregisterReceiver(timeBatteryReceiver)
         upSystemUiVisibility()
-        if (!BuildConfig.DEBUG && ReadBook.inBookshelf) {
-            if (AppConfig.syncBookProgressPlus) {
-                ReadBook.syncProgress()
-            } else {
-                ReadBook.uploadProgress()
-            }
-        }
         if (!BuildConfig.DEBUG) {
             Backup.autoBack(this)
         }
@@ -1822,6 +1809,13 @@ class ReadBookActivity : BaseReadBookActivity(),
                 ReadBook.book?.let {
                     loadChapterList(it)
                 }
+            }
+        }
+        observeEvent<String>(EventBus.QREAD_REMOTE_READ) { remoteBookUrl ->
+            val currentBookUrl = ReadBook.book?.bookUrl
+            if (!currentBookUrl.isNullOrBlank() && currentBookUrl == remoteBookUrl) {
+                toastOnUi("该书已在其他设备继续阅读，当前页面将退出")
+                finish()
             }
         }
     }

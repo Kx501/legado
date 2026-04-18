@@ -373,6 +373,7 @@ class BackupConfigFragment : PreferenceFragment(),
                         lifecycleScope.launch(IO) {
                             if (AppConfig.remoteSyncMode.equals(MODE_QREAD, true) && AppConfig.syncBookProgress) {
                                 RemoteProgressBridge.downloadAllBookProgress()
+                                RemoteProgressBridge.startQReadPushIfEnabled()
                             }
                         }
                         appCtx.toastOnUi(

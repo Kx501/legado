@@ -121,7 +121,7 @@ class App : Application() {
             SourceHelp.adjustSortNumber()
             //同步阅读记录
             if (AppConfig.syncBookProgress) {
-                RemoteProgressBridge.downloadAllBookProgress()
+                RemoteProgressBridge.fullSyncOnStartup()
             }
         }
     }

@@ -2,6 +2,7 @@ package io.legado.app.help.remote
 
 import io.legado.app.constant.AppLog
 import io.legado.app.constant.BookType
+import io.legado.app.constant.EventBus
 import io.legado.app.constant.PreferKey
 import io.legado.app.data.appDb
 import io.legado.app.data.entities.Book
@@ -18,6 +19,7 @@ import io.legado.app.utils.fromJsonObject
 import io.legado.app.utils.getPrefStringSet
 import io.legado.app.utils.putPrefStringSet
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.withContext
@@ -26,9 +28,13 @@ import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.FormBody
 import okhttp3.Request
 import okhttp3.RequestBody.Companion.toRequestBody
+import okhttp3.Response
+import okhttp3.WebSocket
+import okhttp3.WebSocketListener
 import org.json.JSONArray
 import org.json.JSONObject
 import splitties.init.appCtx
+import io.legado.app.utils.postEvent
 
 private enum class RemoteSyncMode(val value: String) {
     LOCAL_ONLY("local"),
@@ -59,6 +65,7 @@ object RemoteProgressBridge {
     /** RssController：一次返回订阅源摘要，再逐条 getRssSources 取 json */
     private const val QREAD_PATH_GET_RSS_SOURCES_BULK = "/api/%d/getRssSourcess"
     private const val QREAD_PATH_GET_RSS_SOURCE = "/api/%d/getRssSources"
+    private const val QREAD_PATH_WS = "/api/%d/ws"
     private const val PARAM_ACCESS_TOKEN = "accessToken"
     private const val PARAM_VERSION = "version"
     private const val PARAM_NAME = "name"
@@ -85,6 +92,10 @@ object RemoteProgressBridge {
     private const val QREAD_CONTENT_TYPE_JSON = "application/json; charset=utf-8"
     private const val LOG_QREAD_PREFIX = "QRead请求失败"
     private const val MODE_QREAD = "qread"
+    @Volatile
+    private var qreadSocket: WebSocket? = null
+    @Volatile
+    private var qreadSocketConnecting = false
 
     suspend fun uploadBookProgress(
         book: Book,
@@ -113,6 +124,13 @@ object RemoteProgressBridge {
         }
     }
 
+    fun scheduleUploadOnChapterChanged(progress: BookProgress) {
+        if (!AppConfig.syncBookProgress) return
+        Coroutine.async {
+            uploadBookProgress(progress)
+        }
+    }
+
     suspend fun getBookProgress(book: Book): BookProgress? {
         return withContext(Dispatchers.IO) {
             when (RemoteSyncMode.fromValue(AppConfig.remoteSyncMode)) {
@@ -129,6 +147,97 @@ object RemoteProgressBridge {
                 RemoteSyncMode.LOCAL_ONLY -> Unit
                 RemoteSyncMode.WEBDAV -> AppWebDav.downloadAllBookProgress()
                 RemoteSyncMode.QREAD -> downloadAllBookProgressQRead()
+            }
+        }
+    }
+
+    suspend fun fullSyncOnStartup() {
+        when (RemoteSyncMode.fromValue(AppConfig.remoteSyncMode)) {
+            RemoteSyncMode.LOCAL_ONLY -> Unit
+            RemoteSyncMode.WEBDAV -> downloadAllBookProgress()
+            RemoteSyncMode.QREAD -> {
+                syncQReadSourcesIfEnabled()
+                syncBookProgressBidirectionalQRead()
+                startQReadPushIfEnabled()
+            }
+        }
+    }
+
+    fun startQReadPushIfEnabled() {
+        if (!AppConfig.remoteSyncMode.equals(MODE_QREAD, true)) return
+        val baseUrl = AppConfig.qreadBaseUrl.trimEnd('/')
+        val token = AppConfig.qreadToken.trim()
+        if (baseUrl.isBlank() || token.isBlank()) return
+        if (qreadSocket != null || qreadSocketConnecting) return
+        qreadSocketConnecting = true
+        val wsUrl = qreadWebSocketUrl(baseUrl, token) ?: run {
+            qreadSocketConnecting = false
+            return
+        }
+        val request = Request.Builder().url(wsUrl).build()
+        qreadSocket = okHttpClient.newWebSocket(request, object : WebSocketListener() {
+            override fun onOpen(webSocket: WebSocket, response: Response) {
+                qreadSocketConnecting = false
+            }
+
+            override fun onMessage(webSocket: WebSocket, text: String) {
+                handleQReadPushMessage(text)
+            }
+
+            override fun onFailure(webSocket: WebSocket, t: Throwable, response: Response?) {
+                qreadSocket = null
+                qreadSocketConnecting = false
+                AppLog.put("QRead推送连接失败: ${t.localizedMessage}", t)
+                Coroutine.async {
+                    delay(5000)
+                    startQReadPushIfEnabled()
+                }
+            }
+
+            override fun onClosed(webSocket: WebSocket, code: Int, reason: String) {
+                qreadSocket = null
+                qreadSocketConnecting = false
+            }
+        })
+    }
+
+    private fun qreadWebSocketUrl(baseUrl: String, token: String): String? {
+        val httpUrl = runCatching { baseUrl.toHttpUrl() }.getOrNull() ?: return null
+        val scheme = when (httpUrl.scheme.lowercase()) {
+            "https" -> "wss"
+            "http" -> "ws"
+            else -> return null
+        }
+        return httpUrl.newBuilder()
+            .scheme(scheme)
+            .encodedPath(QREAD_PATH_WS.format(QREAD_API_VERSIONS.first()))
+            .setQueryParameter("id", token)
+            .build()
+            .toString()
+    }
+
+    private fun handleQReadPushMessage(text: String) {
+        val msg = runCatching { JSONObject(text) }.getOrNull() ?: return
+        when (msg.optString("msg")) {
+            "read" -> {
+                val bookUrl = msg.optString("bookurl").trim()
+                if (bookUrl.isBlank()) return
+                Coroutine.async {
+                    syncBookProgressByBookUrl(bookUrl)
+                }
+                postEvent(EventBus.QREAD_REMOTE_READ, bookUrl)
+            }
+
+            "bookmd5" -> {
+                Coroutine.async {
+                    downloadAllBookProgress()
+                }
+            }
+
+            "sourcemd5", "rssmd5" -> {
+                Coroutine.async {
+                    syncQReadSourcesIfEnabled()
+                }
             }
         }
     }
@@ -676,6 +785,24 @@ object RemoteProgressBridge {
         }
     }
 
+    private suspend fun syncBookProgressByBookUrl(bookUrl: String) {
+        val local = appDb.bookDao.getBook(bookUrl) ?: return
+        val remote = getBookProgressQRead(local) ?: return
+        if (remote.durChapterIndex > local.durChapterIndex ||
+            (remote.durChapterIndex == local.durChapterIndex && remote.durChapterPos > local.durChapterPos)
+        ) {
+            local.durChapterIndex = remote.durChapterIndex
+            local.durChapterPos = remote.durChapterPos
+            if (!remote.durChapterTitle.isNullOrBlank()) {
+                local.durChapterTitle = remote.durChapterTitle
+            }
+            if (remote.durChapterTime > 0L) {
+                local.durChapterTime = remote.durChapterTime
+            }
+            appDb.bookDao.update(local)
+        }
+    }
+
     private suspend fun fetchBookProgressListQRead(
         baseUrl: String,
         token: String,
@@ -731,6 +858,56 @@ object RemoteProgressBridge {
             }
         }
         return emptyList()
+    }
+
+    private suspend fun syncBookProgressBidirectionalQRead() {
+        val baseUrl = AppConfig.qreadBaseUrl.trimEnd('/')
+        val token = AppConfig.qreadToken
+        if (baseUrl.isBlank() || token.isBlank()) return
+        val remoteList = fetchBookProgressListQRead(baseUrl, token)
+        val remoteByUrl = remoteList
+            .mapNotNull { payload -> payload.bookUrl?.trim()?.takeIf { it.isNotBlank() }?.let { it to payload } }
+            .toMap()
+            .toMutableMap()
+        val remoteByNameAuthor = remoteList.associateBy { it.name to it.author }.toMutableMap()
+        appDb.bookDao.webBooks.forEach { local ->
+            currentCoroutineContext().ensureActive()
+            if ((local.type and BookType.local) != 0 || local.bookUrl.isBlank()) return@forEach
+            val remote = remoteByUrl.remove(local.bookUrl) ?: remoteByNameAuthor.remove(local.name to local.author)
+            if (remote == null) {
+                ensureBookOnQReadShelf(baseUrl, token, local)
+                uploadBookProgressQRead(local, BookProgress(local), null)
+                return@forEach
+            }
+            val remoteProgress = remote.toBookProgress()
+            val remoteAhead =
+                remoteProgress.durChapterIndex > local.durChapterIndex ||
+                    (remoteProgress.durChapterIndex == local.durChapterIndex &&
+                        remoteProgress.durChapterPos > local.durChapterPos)
+            if (remoteAhead) {
+                local.durChapterIndex = remoteProgress.durChapterIndex
+                local.durChapterPos = remoteProgress.durChapterPos
+                if (!remoteProgress.durChapterTitle.isNullOrBlank()) {
+                    local.durChapterTitle = remoteProgress.durChapterTitle
+                }
+                if (remoteProgress.durChapterTime > 0L) {
+                    local.durChapterTime = remoteProgress.durChapterTime
+                }
+                appDb.bookDao.update(local)
+            } else if (remoteProgress.durChapterIndex < local.durChapterIndex ||
+                (remoteProgress.durChapterIndex == local.durChapterIndex &&
+                    remoteProgress.durChapterPos < local.durChapterPos)
+            ) {
+                uploadBookProgressQRead(local, BookProgress(local), null)
+            }
+        }
+        remoteByUrl.values.forEach { payload ->
+            currentCoroutineContext().ensureActive()
+            val newBook = payload.toShelfBook() ?: return@forEach
+            if (appDb.bookDao.getBook(newBook.bookUrl) == null) {
+                appDb.bookDao.insert(newBook)
+            }
+        }
     }
 
     private suspend fun downloadAllBookProgressQRead() {

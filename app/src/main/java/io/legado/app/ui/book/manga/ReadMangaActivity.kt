@@ -56,7 +56,6 @@ import io.legado.app.ui.book.toc.TocActivityResult
 import io.legado.app.ui.widget.number.NumberPickerDialog
 import io.legado.app.ui.widget.recycler.LoadMoreView
 import io.legado.app.utils.GSON
-import io.legado.app.utils.NetworkUtils
 import io.legado.app.utils.StartActivityContract
 import io.legado.app.utils.canScroll
 import io.legado.app.utils.fastBinarySearch
@@ -184,6 +183,13 @@ class ReadMangaActivity : VMBaseActivity<ActivityMangaBinding, ReadMangaViewMode
             mMangaFooterConfig = it
             val item = mAdapter.getItem(binding.recyclerView.findCenterViewPosition())
             upInfoBar(item)
+        }
+        observeEvent<String>(EventBus.QREAD_REMOTE_READ) { remoteBookUrl ->
+            val currentBookUrl = ReadManga.book?.bookUrl
+            if (!currentBookUrl.isNullOrBlank() && currentBookUrl == remoteBookUrl) {
+                toastOnUi("该书已在其他设备继续阅读，当前页面将退出")
+                finish()
+            }
         }
     }
 
@@ -346,12 +352,7 @@ class ReadMangaActivity : VMBaseActivity<ActivityMangaBinding, ReadMangaViewMode
     override fun onResume() {
         super.onResume()
         networkChangedListener.register()
-        networkChangedListener.onNetworkChanged = {
-            // 当网络是可用状态且无需初始化时同步进度（初始化中已有同步进度逻辑）
-            if (AppConfig.syncBookProgressPlus && NetworkUtils.isAvailable() && !justInitData && ReadManga.inBookshelf) {
-                ReadManga.syncProgress({ progress -> sureNewProgress(progress) })
-            }
-        }
+        networkChangedListener.onNetworkChanged = {}
         if (enableAutoScrollPage) {
             mScrollTimer.isEnabledPage = true
         }
@@ -364,13 +365,6 @@ class ReadMangaActivity : VMBaseActivity<ActivityMangaBinding, ReadMangaViewMode
         super.onPause()
         if (ReadManga.inBookshelf) {
             ReadManga.saveRead()
-            if (!BuildConfig.DEBUG) {
-                if (AppConfig.syncBookProgressPlus) {
-                    ReadManga.syncProgress()
-                } else {
-                    ReadManga.uploadProgress()
-                }
-            }
         }
         if (!BuildConfig.DEBUG) {
             Backup.autoBack(this)

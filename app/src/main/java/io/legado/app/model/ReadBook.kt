@@ -925,6 +925,9 @@ object ReadBook : CoroutineScope by MainScope() {
                         SourceCallBack.callBackBook(SourceCallBack.SAVE_READ, bookSource, book, it, durTime.toString())
                     }
                 }
+                if (chapterChanged) {
+                    RemoteProgressBridge.scheduleUploadOnChapterChanged(BookProgress(book))
+                }
                 book.update()
             }.onFailure {
                 AppLog.put("保存书籍阅读进度信息出错\n$it", it)
