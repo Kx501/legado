@@ -44,6 +44,7 @@ private enum class RemoteSyncMode(val value: String) {
 object RemoteProgressBridge {
     private const val QREAD_CLIENT_VERSION = "3.1.0"
     private val QREAD_API_VERSIONS = intArrayOf(5, 1)
+    private const val QREAD_SYNC_GROUP_TAG = "QRead"
     private const val QREAD_PATH_GET_BOOKSHELF = "/api/%d/getBookshelf"
     private const val QREAD_PATH_SAVE_BOOK_PROGRESS = "/api/%d/saveBookProgress"
     private const val QREAD_PATH_SAVE_BOOKS = "/api/%d/saveBooks"
@@ -259,7 +260,19 @@ object RemoteProgressBridge {
                 if (sourceJson.isBlank()) return@withContext 0
                 val sources = GSON.fromJsonArray<BookSource>(sourceJson).getOrNull() ?: emptyList()
                 if (sources.isEmpty()) return@withContext 0
+                val remoteUrls = sources.mapNotNull { it.bookSourceUrl.trim().takeIf { u -> u.isNotBlank() } }.toSet()
+                sources.forEach { it.addGroup(QREAD_SYNC_GROUP_TAG) }
                 appDb.bookSourceDao.insert(*sources.toTypedArray())
+                // 服务端删除：仅清理带 QRead 分组标记的条目，避免误删用户本地自建书源
+                if (remoteUrls.isNotEmpty()) {
+                    val localQReadSources = appDb.bookSourceDao.getByGroup(QREAD_SYNC_GROUP_TAG)
+                    localQReadSources
+                        .asSequence()
+                        .map { it.bookSourceUrl.trim() }
+                        .filter { it.isNotBlank() && it !in remoteUrls }
+                        .distinct()
+                        .forEach { appDb.bookSourceDao.delete(it) }
+                }
                 sources.size
             } catch (e: Exception) {
                 currentCoroutineContext().ensureActive()
@@ -277,15 +290,27 @@ object RemoteProgressBridge {
             try {
                 val summaries = fetchRssSourceSummariesQRead(baseUrl, token)
                 if (summaries.isEmpty()) return@withContext 0
+                val remoteUrls = summaries.mapNotNull { it.sourceUrl.trim().takeIf { u -> u.isNotBlank() } }.toSet()
                 val rssSources = mutableListOf<RssSource>()
                 summaries.forEach { summary ->
                     val source = fetchRssSourceDetailQRead(baseUrl, token, summary.sourceUrl) ?: return@forEach
                     source.enabled = summary.enabled
                     source.sourceGroup = summary.sourceGroup
+                    source.addGroup(QREAD_SYNC_GROUP_TAG)
                     rssSources.add(source)
                 }
                 if (rssSources.isEmpty()) return@withContext 0
                 appDb.rssSourceDao.insert(*rssSources.toTypedArray())
+                // 服务端删除：仅清理带 QRead 分组标记的条目，避免误删用户本地自建订阅源
+                if (remoteUrls.isNotEmpty()) {
+                    val localQReadSources = appDb.rssSourceDao.getByGroup(QREAD_SYNC_GROUP_TAG)
+                    localQReadSources
+                        .asSequence()
+                        .map { it.sourceUrl.trim() }
+                        .filter { it.isNotBlank() && it !in remoteUrls }
+                        .distinct()
+                        .forEach { appDb.rssSourceDao.delete(it) }
+                }
                 rssSources.size
             } catch (e: Exception) {
                 currentCoroutineContext().ensureActive()
