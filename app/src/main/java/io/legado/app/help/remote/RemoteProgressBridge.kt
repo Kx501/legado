@@ -96,6 +96,7 @@ object RemoteProgressBridge {
     private const val MODE_QREAD = "qread"
     private const val TAG_QREAD_PUSH = "QReadPush"
     private const val QREAD_PUSH_MSG_LOG_MAX = 240
+    private const val QREAD_PUSH_RECONNECT_DELAY_MS = 15_000L
     @Volatile
     private var qreadSocket: WebSocket? = null
     @Volatile
@@ -227,8 +228,8 @@ object RemoteProgressBridge {
                 }
                 AppLog.put("QRead推送连接失败: ${t.localizedMessage}", t)
                 Coroutine.async {
-                    delay(5000)
-                    qreadPushDebug { "reconnect after delay" }
+                    qreadPushDebug { "reconnect in ${QREAD_PUSH_RECONNECT_DELAY_MS}ms" }
+                    delay(QREAD_PUSH_RECONNECT_DELAY_MS)
                     startQReadPushIfEnabled()
                 }
             }
@@ -243,17 +244,24 @@ object RemoteProgressBridge {
 
     private fun qreadWebSocketUrl(baseUrl: String, token: String): String? {
         val httpUrl = runCatching { baseUrl.toHttpUrl() }.getOrNull() ?: return null
-        val scheme = when (httpUrl.scheme.lowercase()) {
-            "https" -> "wss"
-            "http" -> "ws"
+        // OkHttp 的 HttpUrl.Builder 仅允许 http/https，不能直接设为 ws/wss
+        val wsScheme = when (httpUrl.scheme.lowercase()) {
+            "https", "wss" -> "wss"
+            "http", "ws" -> "ws"
             else -> return null
         }
-        return httpUrl.newBuilder()
-            .scheme(scheme)
+        val builderScheme = if (wsScheme == "wss") "https" else "http"
+        val built = httpUrl.newBuilder()
+            .scheme(builderScheme)
             .encodedPath(QREAD_PATH_WS.format(QREAD_API_VERSIONS.first()))
             .setQueryParameter("id", token)
             .build()
             .toString()
+        return built.replaceFirst(
+            "${builderScheme}://",
+            "${wsScheme}://",
+            ignoreCase = true
+        )
     }
 
     private fun handleQReadPushMessage(text: String) {

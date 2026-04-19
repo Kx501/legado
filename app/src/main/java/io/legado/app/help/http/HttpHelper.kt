@@ -15,12 +15,17 @@ import okhttp3.Credentials
 import okhttp3.Dns
 import okhttp3.HttpUrl
 import okhttp3.OkHttpClient
+import okhttp3.Request
 import java.net.InetSocketAddress
 import java.net.Proxy
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.ThreadFactory
 import java.util.concurrent.ThreadPoolExecutor
 import java.util.concurrent.TimeUnit
+
+/** WebSocket 升级必须由 OkHttp 持有底层 socket，不可经 Cronet、不可包装 101 响应体 */
+fun Request.isWebSocketUpgrade(): Boolean =
+    header("Upgrade")?.equals("websocket", ignoreCase = true) == true
 
 private val proxyClientCache: ConcurrentHashMap<String, OkHttpClient> by lazy {
     ConcurrentHashMap()
@@ -76,9 +81,11 @@ val okHttpClient: OkHttpClient by lazy {
             } else if (request.header(AppConst.UA_NAME) == "null") {
                 builder.removeHeader(AppConst.UA_NAME)
             }
-            builder.addHeader("Keep-Alive", "300")
-            builder.addHeader("Connection", "Keep-Alive")
-            builder.addHeader("Cache-Control", "no-cache")
+            if (!request.isWebSocketUpgrade()) {
+                builder.addHeader("Keep-Alive", "300")
+                builder.addHeader("Connection", "Keep-Alive")
+                builder.addHeader("Cache-Control", "no-cache")
+            }
             chain.proceed(builder.build())
         }
         .addNetworkInterceptor { chain ->

@@ -14,6 +14,9 @@ import java.util.zip.InflaterInputStream
 object DecompressInterceptor : Interceptor {
     override fun intercept(chain: Interceptor.Chain): Response {
         val request = chain.request()
+        if (request.isWebSocketUpgrade()) {
+            return chain.proceed(request)
+        }
         val requestBuilder = request.newBuilder()
 
         var transparentDecompress = false

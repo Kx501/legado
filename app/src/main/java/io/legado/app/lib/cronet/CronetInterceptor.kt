@@ -5,6 +5,7 @@ import android.os.Build
 import androidx.annotation.Keep
 import io.legado.app.help.http.CookieManager
 import io.legado.app.help.http.CookieManager.cookieJarHeader
+import io.legado.app.help.http.isWebSocketUpgrade
 import io.legado.app.utils.printOnDebug
 import okhttp3.Call
 import okhttp3.CookieJar
@@ -24,6 +25,10 @@ class CronetInterceptor(private val cookieJar: CookieJar) : Interceptor {
             throw IOException("Canceled")
         }
         val original: Request = chain.request()
+        // Cronet 无法提供 WebSocket 升级所需的底层 Socket，必须走 OkHttp
+        if (original.isWebSocketUpgrade()) {
+            return chain.proceed(original)
+        }
         //Cronet未初始化
         if (!CronetLoader.install() || cronetEngine == null) {
             return chain.proceed(original)
