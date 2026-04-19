@@ -71,23 +71,51 @@ object AppWebDav {
             return url
         }
 
+    private suspend fun establishWebDavSession(mAuthorization: Authorization) {
+        checkAuthorization(mAuthorization)
+        WebDav(rootWebDavUrl, mAuthorization).makeAsDir()
+        WebDav(bookProgressUrl, mAuthorization).makeAsDir()
+        WebDav(exportsWebDavUrl, mAuthorization).makeAsDir()
+        WebDav(bgWebDavUrl, mAuthorization).makeAsDir()
+        val rootBooksUrl = "${rootWebDavUrl}books/"
+        defaultBookWebDav = RemoteBookWebDav(rootBooksUrl, mAuthorization)
+        authorization = mAuthorization
+    }
+
+    /**
+     * 按当前配置刷新 WebDAV 会话。
+     * 仅在 [AppConfig.remoteSyncMode] 为 `webdav` 时访问网络，避免 QRead 模式下仍扫用户 WebDAV。
+     */
     suspend fun upConfig() {
         kotlin.runCatching {
             authorization = null
             defaultBookWebDav = null
             val account = appCtx.getPrefString(PreferKey.webDavAccount)
             val password = appCtx.getPrefString(PreferKey.webDavPassword)
-            if (!account.isNullOrEmpty() && !password.isNullOrEmpty()) {
-                val mAuthorization = Authorization(account, password)
-                checkAuthorization(mAuthorization)
-                WebDav(rootWebDavUrl, mAuthorization).makeAsDir()
-                WebDav(bookProgressUrl, mAuthorization).makeAsDir()
-                WebDav(exportsWebDavUrl, mAuthorization).makeAsDir()
-                WebDav(bgWebDavUrl, mAuthorization).makeAsDir()
-                val rootBooksUrl = "${rootWebDavUrl}books/"
-                defaultBookWebDav = RemoteBookWebDav(rootBooksUrl, mAuthorization)
-                authorization = mAuthorization
+            if (account.isNullOrEmpty() || password.isNullOrEmpty()) {
+                return@runCatching
             }
+            if (!AppConfig.remoteSyncMode.equals("webdav", ignoreCase = true)) {
+                return@runCatching
+            }
+            establishWebDavSession(Authorization(account, password))
+        }
+    }
+
+    /**
+     * QRead 等模式下 [upConfig] 不会建连；使用「默认 WebDAV 网盘书籍」或依赖 [authorization] 的本地 WebDAV 书前调用。
+     */
+    suspend fun ensureWebDavDefaultForRemoteBooks() {
+        if (defaultBookWebDav != null && authorization != null) return
+        if (AppConfig.remoteSyncMode.equals("webdav", ignoreCase = true)) {
+            upConfig()
+            return
+        }
+        kotlin.runCatching {
+            val account = appCtx.getPrefString(PreferKey.webDavAccount)
+            val password = appCtx.getPrefString(PreferKey.webDavPassword)
+            if (account.isNullOrEmpty() || password.isNullOrEmpty()) return@runCatching
+            establishWebDavSession(Authorization(account, password))
         }
     }
 

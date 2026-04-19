@@ -545,7 +545,10 @@ class BackupConfigFragment : PreferenceFragment(),
     }
 
     private suspend fun showRestoreDialog(context: Context) {
-        val names = withContext(IO) { AppWebDav.getBackupNames() }
+        val names = withContext(IO) {
+            AppWebDav.ensureWebDavDefaultForRemoteBooks()
+            AppWebDav.getBackupNames()
+        }
         if (AppWebDav.isJianGuoYun && names.size > 700) {
             context.toastOnUi("由于坚果云限制列出文件数量，部分备份可能未显示，请及时清理旧备份")
         }
@@ -572,6 +575,7 @@ class BackupConfigFragment : PreferenceFragment(),
         waitDialog.setText("恢复中…")
         waitDialog.show()
         val task = Coroutine.async {
+            AppWebDav.ensureWebDavDefaultForRemoteBooks()
             AppWebDav.restoreWebDav(name)
         }.onError {
             AppLog.put("WebDav恢复出错\n${it.localizedMessage}", it)

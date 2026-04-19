@@ -104,6 +104,7 @@ class RemoteBookViewModel(application: Application) : BaseViewModel(application)
                 return@execute
             }
             isDefaultWebdav = true
+            AppWebDav.ensureWebDavDefaultForRemoteBooks()
             remoteBookWebDav = AppWebDav.defaultBookWebDav
                 ?: throw NoStackTraceException("webDav没有配置")
         }.onError {

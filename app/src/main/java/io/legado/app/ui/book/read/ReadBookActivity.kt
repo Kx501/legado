@@ -376,6 +376,13 @@ class ReadBookActivity : BaseReadBookActivity(),
         autoPageStop()
         backupJob?.cancel()
         ReadBook.saveRead()
+        if (ReadBook.inBookshelf && AppConfig.syncBookProgress &&
+            AppConfig.remoteSyncMode.equals("qread", ignoreCase = true)
+        ) {
+            ReadBook.progressSnapshotForRemote()?.let { p ->
+                RemoteProgressBridge.scheduleUploadOnReaderExitIfQRead(p)
+            }
+        }
         ReadBook.cancelPreDownloadTask()
         unregisterReceiver(timeBatteryReceiver)
         upSystemUiVisibility()
@@ -448,7 +455,12 @@ class ReadBookActivity : BaseReadBookActivity(),
         }
         lifecycleScope.launch {
             val show = ReadBook.inBookshelf && withContext(IO) {
-                AppWebDav.isOk
+                when {
+                    AppConfig.remoteSyncMode.equals("webdav", ignoreCase = true) -> AppWebDav.isOk
+                    AppConfig.remoteSyncMode.equals("qread", ignoreCase = true) ->
+                        AppConfig.qreadBaseUrl.isNotBlank() && AppConfig.qreadToken.isNotBlank()
+                    else -> false
+                }
             }
             menu.findItem(R.id.menu_get_progress)?.isVisible = show
             menu.findItem(R.id.menu_cover_progress)?.isVisible = show
@@ -1664,7 +1676,7 @@ class ReadBookActivity : BaseReadBookActivity(),
         backupJob = lifecycleScope.launch(IO) {
             delay(300000)
             ReadBook.book?.let {
-                AppWebDav.uploadBookProgress(it)
+                RemoteProgressBridge.uploadBookProgress(it)
                 ensureActive()
                 it.update()
                 Backup.autoBack(this@ReadBookActivity)

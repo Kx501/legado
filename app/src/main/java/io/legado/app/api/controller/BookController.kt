@@ -9,7 +9,7 @@ import io.legado.app.data.appDb
 import io.legado.app.data.entities.Book
 import io.legado.app.data.entities.BookProgress
 import io.legado.app.data.entities.BookSource
-import io.legado.app.help.AppWebDav
+import io.legado.app.help.remote.RemoteProgressBridge
 import io.legado.app.help.CacheManager
 import io.legado.app.help.book.BookHelp
 import io.legado.app.help.book.ContentProcessor
@@ -228,7 +228,7 @@ object BookController {
     suspend fun saveBook(postData: String?): ReturnData {
         val returnData = ReturnData()
         GSON.fromJsonObject<Book>(postData).getOrNull()?.let { book ->
-            AppWebDav.uploadBookProgress(book)
+            RemoteProgressBridge.uploadBookProgress(book)
             book.save()
             return returnData.setData("")
         }
@@ -260,7 +260,7 @@ object BookController {
                     book.durChapterPos = bookProgress.durChapterPos
                     book.durChapterTitle = bookProgress.durChapterTitle
                     book.durChapterTime = bookProgress.durChapterTime
-                    AppWebDav.uploadBookProgress(bookProgress) {
+                    RemoteProgressBridge.uploadBookProgress(bookProgress) {
                         book.syncTime = System.currentTimeMillis()
                     }
                     appDb.bookDao.update(book)

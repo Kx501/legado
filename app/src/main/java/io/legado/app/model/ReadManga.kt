@@ -343,7 +343,9 @@ object ReadManga : CoroutineScope by MainScope() {
                         )
                     }
                 }
-                if (chapterChanged) {
+                if (chapterChanged &&
+                    AppConfig.remoteSyncMode.equals("qread", ignoreCase = true)
+                ) {
                     RemoteProgressBridge.scheduleUploadOnChapterChanged(BookProgress(book))
                 }
                 appDb.bookDao.update(book)

@@ -491,6 +491,9 @@ object LocalBook {
         try {
             AppConfig.defaultBookTreeUri
                 ?: throw NoBooksDirException()
+            if (AppWebDav.authorization == null) {
+                runBlocking { AppWebDav.ensureWebDavDefaultForRemoteBooks() }
+            }
             // 兼容旧版链接
             val webdav: WebDav = kotlin.runCatching {
                 WebDav.fromPath(webDavUrl)

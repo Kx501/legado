@@ -149,6 +149,17 @@ object RemoteProgressBridge {
         }
     }
 
+    /**
+     * 离开阅读界面时上传当前进度（对齐轻阅读关书行为）。仅 QRead；尊重 [AppConfig.syncBookProgress]。
+     */
+    fun scheduleUploadOnReaderExitIfQRead(progress: BookProgress) {
+        if (!AppConfig.syncBookProgress) return
+        if (!AppConfig.remoteSyncMode.equals(MODE_QREAD, true)) return
+        Coroutine.async {
+            uploadBookProgress(progress)
+        }
+    }
+
     suspend fun getBookProgress(book: Book): BookProgress? {
         return withContext(Dispatchers.IO) {
             when (RemoteSyncMode.fromValue(AppConfig.remoteSyncMode)) {

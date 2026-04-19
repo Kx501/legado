@@ -925,7 +925,9 @@ object ReadBook : CoroutineScope by MainScope() {
                         SourceCallBack.callBackBook(SourceCallBack.SAVE_READ, bookSource, book, it, durTime.toString())
                     }
                 }
-                if (chapterChanged) {
+                if (chapterChanged &&
+                    AppConfig.remoteSyncMode.equals("qread", ignoreCase = true)
+                ) {
                     RemoteProgressBridge.scheduleUploadOnChapterChanged(BookProgress(book))
                 }
                 book.update()
@@ -933,6 +935,19 @@ object ReadBook : CoroutineScope by MainScope() {
                 AppLog.put("保存书籍阅读进度信息出错\n$it", it)
             }
         }
+    }
+
+    /** 按当前阅读内存态构造进度，供 QRead 关书上传等（不必等 [saveRead] 异步写库完成）。 */
+    fun progressSnapshotForRemote(): BookProgress? {
+        val b = book ?: return null
+        return BookProgress(
+            name = b.name,
+            author = b.author,
+            durChapterIndex = durChapterIndex,
+            durChapterPos = durChapterPos,
+            durChapterTime = System.currentTimeMillis(),
+            durChapterTitle = b.durChapterTitle
+        )
     }
 
     /**
