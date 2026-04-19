@@ -67,7 +67,6 @@ import io.legado.app.utils.fromJsonObject
 import io.legado.app.utils.isJsonObject
 import io.legado.app.model.localBook.EpubFile
 import io.legado.app.model.localBook.MobiFile
-import io.legado.app.receiver.NetworkChangedListener
 import io.legado.app.receiver.TimeBatteryReceiver
 import io.legado.app.service.BaseReadAloudService
 import io.legado.app.ui.about.AppLogDialog
@@ -261,9 +260,6 @@ class ReadBookActivity : BaseReadBookActivity(),
 
     //恢复跳转前进度对话框的交互结果
     private var confirmRestoreProcess: Boolean? = null
-    private val networkChangedListener by lazy {
-        NetworkChangedListener(this)
-    }
     private var finishByQReadRemoteRead = false
     private var justInitData: Boolean = false
     private var syncDialog: AlertDialog? = null
@@ -362,9 +358,6 @@ class ReadBookActivity : BaseReadBookActivity(),
         registerReceiver(timeBatteryReceiver, timeBatteryReceiver.filter)
         binding.readView.upTime()
         screenOffTimerStart()
-        // 网络监听，当从无网切换到网络环境时同步进度（注意注册的同时就会收到监听，因此界面激活时无需重复执行同步操作）
-        networkChangedListener.register()
-        networkChangedListener.onNetworkChanged = {}
         if (ReadBook.inBookshelf && RemoteProgressBridge.isProgressSyncEnabled()) {
             lifecycleScope.launch(IO) {
                 RemoteProgressBridge.startQReadPushIfEnabled()
@@ -399,7 +392,6 @@ class ReadBookActivity : BaseReadBookActivity(),
             Backup.autoBack(this)
         }
         justInitData = false
-        networkChangedListener.unRegister()
     }
 
     override fun onCompatCreateOptionsMenu(menu: Menu): Boolean {

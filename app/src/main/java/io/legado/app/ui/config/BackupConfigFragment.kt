@@ -82,7 +82,7 @@ class BackupConfigFragment : PreferenceFragment(),
         private const val QREAD_PARAM_USERNAME = "username"
         private const val QREAD_PARAM_PASSWORD = "password"
         private const val QREAD_PARAM_MODEL = "model"
-        private val QREAD_API_VERSIONS = intArrayOf(5, 1)
+        private const val QREAD_API_VERSION = 5
     }
 
     private val viewModel by activityViewModels<ConfigViewModel>()
@@ -406,40 +406,33 @@ class BackupConfigFragment : PreferenceFragment(),
         username: String,
         password: String
     ): String? {
-        var lastError: Throwable? = null
-        QREAD_API_VERSIONS.forEach { version ->
-            runCatching {
-                val loginUrl = "$baseUrl${QREAD_LOGIN_PATH_TEMPLATE.format(version)}"
-                val body = FormBody.Builder()
-                    .add(QREAD_PARAM_USERNAME, username)
-                    .add(QREAD_PARAM_PASSWORD, password)
-                    .add(QREAD_PARAM_MODEL, QREAD_MODEL)
-                    .build()
-                val request = Request.Builder()
-                    .url(loginUrl)
-                    .post(body)
-                    .build()
-                io.legado.app.help.http.okHttpClient.newCall(request).execute().use { response ->
-                    val payload = response.body.string()
-                    if (!response.isSuccessful) {
-                        error("HTTP ${response.code}")
-                    }
-                    val json = JSONObject(payload)
-                    val isSuccess = json.optBoolean("isSuccess", false)
-                    if (!isSuccess) {
-                        error(json.optString("errorMsg", "login failed"))
-                    }
-                    val data = json.optJSONObject("data")
-                    data?.optString("accessToken")?.takeIf { it.isNotBlank() }
-                }
-            }.onSuccess { token ->
-                if (!token.isNullOrBlank()) return token
-                lastError = IllegalStateException("accessToken is empty")
-            }.onFailure {
-                lastError = it
+        val loginUrl = "$baseUrl${QREAD_LOGIN_PATH_TEMPLATE.format(QREAD_API_VERSION)}"
+        val body = FormBody.Builder()
+            .add(QREAD_PARAM_USERNAME, username)
+            .add(QREAD_PARAM_PASSWORD, password)
+            .add(QREAD_PARAM_MODEL, QREAD_MODEL)
+            .build()
+        val request = Request.Builder()
+            .url(loginUrl)
+            .post(body)
+            .build()
+        io.legado.app.help.http.okHttpClient.newCall(request).execute().use { response ->
+            val payload = response.body.string()
+            if (!response.isSuccessful) {
+                error("HTTP ${response.code}")
             }
+            val json = JSONObject(payload)
+            val isSuccess = json.optBoolean("isSuccess", false)
+            if (!isSuccess) {
+                error(json.optString("errorMsg", "login failed"))
+            }
+            val data = json.optJSONObject("data")
+            val token = data?.optString("accessToken")?.takeIf { it.isNotBlank() }
+            if (token.isNullOrBlank()) {
+                error("accessToken is empty")
+            }
+            return token
         }
-        throw lastError ?: IllegalStateException("QRead login failed")
     }
 
     /**

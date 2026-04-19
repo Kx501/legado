@@ -38,7 +38,6 @@ import io.legado.app.help.remote.RemoteProgressBridge
 import io.legado.app.help.storage.Backup
 import io.legado.app.lib.dialogs.alert
 import io.legado.app.model.ReadManga
-import io.legado.app.receiver.NetworkChangedListener
 import io.legado.app.ui.book.changesource.ChangeBookSourceDialog
 import io.legado.app.ui.book.info.BookInfoActivity
 import io.legado.app.ui.book.manga.config.MangaColorFilterConfig
@@ -102,10 +101,6 @@ class ReadMangaActivity : VMBaseActivity<ActivityMangaBinding, ReadMangaViewMode
     private var mMenu: Menu? = null
 
     private var mRecyclerViewPreloader: RecyclerViewPreloader<Any>? = null
-
-    private val networkChangedListener by lazy {
-        NetworkChangedListener(this)
-    }
 
     private var justInitData: Boolean = false
     private var finishByQReadRemoteRead = false
@@ -365,8 +360,6 @@ class ReadMangaActivity : VMBaseActivity<ActivityMangaBinding, ReadMangaViewMode
 
     override fun onResume() {
         super.onResume()
-        networkChangedListener.register()
-        networkChangedListener.onNetworkChanged = {}
         if (ReadManga.inBookshelf && RemoteProgressBridge.isProgressSyncEnabled()) {
             lifecycleScope.launch {
                 RemoteProgressBridge.startQReadPushIfEnabled()
@@ -404,7 +397,6 @@ class ReadMangaActivity : VMBaseActivity<ActivityMangaBinding, ReadMangaViewMode
             Backup.autoBack(this)
         }
         ReadManga.cancelPreDownloadTask()
-        networkChangedListener.unRegister()
         mScrollTimer.isEnabledPage = false
         mScrollTimer.isEnabled = false
     }

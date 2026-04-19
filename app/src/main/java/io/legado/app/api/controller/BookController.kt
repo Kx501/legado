@@ -260,9 +260,9 @@ object BookController {
                     book.durChapterPos = bookProgress.durChapterPos
                     book.durChapterTitle = bookProgress.durChapterTitle
                     book.durChapterTime = bookProgress.durChapterTime
-                    RemoteProgressBridge.uploadBookProgress(bookProgress) {
+                    RemoteProgressBridge.uploadBookProgress(bookProgress, onSuccess = {
                         book.syncTime = System.currentTimeMillis()
-                    }
+                    })
                     appDb.bookDao.update(book)
                     ReadBook.book?.let {
                         if (it.name == bookProgress.name &&
