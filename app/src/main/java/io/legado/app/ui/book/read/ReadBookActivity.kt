@@ -130,6 +130,7 @@ import io.legado.app.utils.startActivity
 import io.legado.app.utils.startActivityForBook
 import io.legado.app.utils.sysScreenOffTime
 import io.legado.app.utils.throttle
+import io.legado.app.utils.longToastOnUi
 import io.legado.app.utils.toastOnUi
 import io.legado.app.utils.visible
 import kotlinx.coroutines.Dispatchers.IO
@@ -263,6 +264,7 @@ class ReadBookActivity : BaseReadBookActivity(),
     private val networkChangedListener by lazy {
         NetworkChangedListener(this)
     }
+    private var finishByQReadRemoteRead = false
     private var justInitData: Boolean = false
     private var syncDialog: AlertDialog? = null
 
@@ -363,10 +365,16 @@ class ReadBookActivity : BaseReadBookActivity(),
         // 网络监听，当从无网切换到网络环境时同步进度（注意注册的同时就会收到监听，因此界面激活时无需重复执行同步操作）
         networkChangedListener.register()
         networkChangedListener.onNetworkChanged = {}
-        if (ReadBook.inBookshelf && AppConfig.syncBookProgress) {
+        if (ReadBook.inBookshelf && RemoteProgressBridge.isProgressSyncEnabled()) {
             lifecycleScope.launch(IO) {
                 RemoteProgressBridge.startQReadPushIfEnabled()
-                ReadBook.syncProgress({ progress -> sureNewProgress(progress) })
+                if (AppConfig.remoteSyncMode.equals("qread", ignoreCase = true)) {
+                    ReadBook.progressSnapshotForRemote()?.let { p ->
+                        RemoteProgressBridge.scheduleUploadOnReaderEnterQRead(p)
+                    }
+                } else {
+                    ReadBook.syncProgress({ progress -> sureNewProgress(progress) })
+                }
             }
         }
     }
@@ -376,11 +384,12 @@ class ReadBookActivity : BaseReadBookActivity(),
         autoPageStop()
         backupJob?.cancel()
         ReadBook.saveRead()
-        if (ReadBook.inBookshelf && AppConfig.syncBookProgress &&
+        if (!finishByQReadRemoteRead &&
+            ReadBook.inBookshelf && RemoteProgressBridge.isProgressSyncEnabled() &&
             AppConfig.remoteSyncMode.equals("qread", ignoreCase = true)
         ) {
             ReadBook.progressSnapshotForRemote()?.let { p ->
-                RemoteProgressBridge.scheduleUploadOnReaderExitIfQRead(p)
+                RemoteProgressBridge.scheduleUploadOnReaderExitQRead(p)
             }
         }
         ReadBook.cancelPreDownloadTask()
@@ -463,7 +472,6 @@ class ReadBookActivity : BaseReadBookActivity(),
                 }
             }
             menu.findItem(R.id.menu_get_progress)?.isVisible = show
-            menu.findItem(R.id.menu_cover_progress)?.isVisible = show
         }
     }
 
@@ -613,10 +621,6 @@ class ReadBookActivity : BaseReadBookActivity(),
                 viewModel.syncBookProgress(it) { progress ->
                     sureSyncProgress(progress)
                 }
-            }
-
-            R.id.menu_cover_progress -> ReadBook.book?.let {
-                ReadBook.uploadProgress(true) { toastOnUi(R.string.upload_book_success) }
             }
 
             R.id.menu_same_title_removed -> {
@@ -1830,10 +1834,21 @@ class ReadBookActivity : BaseReadBookActivity(),
             }
         }
         observeEvent<String>(EventBus.QREAD_REMOTE_READ) { remoteBookUrl ->
-            val currentBookUrl = ReadBook.book?.bookUrl
-            if (!currentBookUrl.isNullOrBlank() && currentBookUrl == remoteBookUrl) {
-                toastOnUi("该书已在其他设备继续阅读，当前页面将退出")
-                finish()
+            val currentBookUrl = ReadBook.book?.bookUrl ?: return@observeEvent
+            if (currentBookUrl.isBlank()) return@observeEvent
+            if (RemoteProgressBridge.normalizeQReadBookUrl(currentBookUrl) ==
+                RemoteProgressBridge.normalizeQReadBookUrl(remoteBookUrl)
+            ) {
+                runOnUiThread {
+                    if (isFinishing || isDestroyed) return@runOnUiThread
+                    finishByQReadRemoteRead = true
+                    longToastOnUi("该书已在其他设备继续阅读，当前页面将退出")
+                    handler.postDelayed({
+                        if (!isFinishing && !isDestroyed) {
+                            finish()
+                        }
+                    }, 2000L)
+                }
             }
         }
     }

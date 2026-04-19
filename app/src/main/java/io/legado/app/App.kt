@@ -120,7 +120,7 @@ class App : Application() {
             //调整排序序号
             SourceHelp.adjustSortNumber()
             //同步阅读记录
-            if (AppConfig.syncBookProgress) {
+            if (RemoteProgressBridge.isProgressSyncEnabled()) {
                 RemoteProgressBridge.fullSyncOnStartup()
             }
         }

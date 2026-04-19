@@ -209,7 +209,7 @@ class ReadMangaViewModel(application: Application) : BaseViewModel(application) 
         book: Book,
         alertSync: ((progress: BookProgress) -> Unit)? = null
     ) {
-        if (!AppConfig.syncBookProgress) return
+        if (!RemoteProgressBridge.isProgressSyncEnabled()) return
         execute {
             RemoteProgressBridge.getBookProgress(book)
         }.onError {

@@ -34,6 +34,8 @@ import okhttp3.WebSocket
 import okhttp3.WebSocketListener
 import org.json.JSONArray
 import org.json.JSONObject
+import android.os.Handler
+import android.os.Looper
 import splitties.init.appCtx
 import io.legado.app.utils.LogUtils
 import io.legado.app.utils.postEvent
@@ -55,7 +57,7 @@ private enum class RemoteSyncMode(val value: String) {
  */
 object RemoteProgressBridge {
     private const val QREAD_CLIENT_VERSION = "3.1.0"
-    private val QREAD_API_VERSIONS = intArrayOf(5, 1)
+    private val QREAD_API_VERSIONS = intArrayOf(5)
     private const val QREAD_PATH_GET_BOOKSHELF = "/api/%d/getBookshelf"
     private const val QREAD_PATH_SAVE_BOOK_PROGRESS = "/api/%d/saveBookProgress"
     private const val QREAD_PATH_SAVE_BOOKS = "/api/%d/saveBooks"
@@ -102,6 +104,20 @@ object RemoteProgressBridge {
     @Volatile
     private var qreadSocketConnecting = false
 
+    /**
+     * 统一同步开关语义：
+     * - qread: 始终启用（不再受 syncBookProgress 影响）
+     * - webdav: 受 syncBookProgress 控制
+     * - local: 关闭
+     */
+    fun isProgressSyncEnabled(): Boolean {
+        return when (RemoteSyncMode.fromValue(AppConfig.remoteSyncMode)) {
+            RemoteSyncMode.QREAD -> true
+            RemoteSyncMode.WEBDAV -> AppConfig.syncBookProgress
+            RemoteSyncMode.LOCAL_ONLY -> false
+        }
+    }
+
     private inline fun qreadPushDebug(lazyMsg: () -> String) {
         if (BuildConfig.DEBUG || AppConfig.recordLog) {
             LogUtils.d(TAG_QREAD_PUSH, lazyMsg)
@@ -113,6 +129,15 @@ object RemoteProgressBridge {
         val q = wsUrl.indexOf('?')
         if (q < 0) return wsUrl
         return wsUrl.substring(0, q) + "?id=***"
+    }
+
+    /** 与推送、本地存库的 bookUrl 比对时：去首尾空白与末尾 `/`，避免同书不同写法导致无法「挤下线」。 */
+    fun normalizeQReadBookUrl(url: String): String = url.trim().trimEnd('/')
+
+    /** QRead WebSocket `read` 消息里的书籍地址（兼容不同 JSON 键名）。 */
+    private fun qreadReadMessageBookUrl(msg: JSONObject): String {
+        return msg.optString("bookurl").ifBlank { msg.optString("bookUrl") }
+            .ifBlank { msg.optString("book_url") }.trim()
     }
 
     suspend fun uploadBookProgress(
@@ -143,17 +168,28 @@ object RemoteProgressBridge {
     }
 
     fun scheduleUploadOnChapterChanged(progress: BookProgress) {
-        if (!AppConfig.syncBookProgress) return
+        if (!isProgressSyncEnabled()) return
         Coroutine.async {
             uploadBookProgress(progress)
         }
     }
 
     /**
-     * 离开阅读界面时上传当前进度（对齐轻阅读关书行为）。仅 QRead；尊重 [AppConfig.syncBookProgress]。
+     * 离开阅读界面时上传当前进度（对齐轻阅读关书行为）。仅 QRead。
      */
-    fun scheduleUploadOnReaderExitIfQRead(progress: BookProgress) {
-        if (!AppConfig.syncBookProgress) return
+    fun scheduleUploadOnReaderExitQRead(progress: BookProgress) {
+        if (!isProgressSyncEnabled()) return
+        if (!AppConfig.remoteSyncMode.equals(MODE_QREAD, true)) return
+        Coroutine.async {
+            uploadBookProgress(progress)
+        }
+    }
+
+    /**
+     * 进入阅读界面时上传当前进度（用于触发服务端 read 推送，实现网页/其他端挤出）。仅 QRead。
+     */
+    fun scheduleUploadOnReaderEnterQRead(progress: BookProgress) {
+        if (!isProgressSyncEnabled()) return
         if (!AppConfig.remoteSyncMode.equals(MODE_QREAD, true)) return
         Coroutine.async {
             uploadBookProgress(progress)
@@ -283,16 +319,19 @@ object RemoteProgressBridge {
         val kind = msg.optString("msg")
         when (kind) {
             "read" -> {
-                val bookUrl = msg.optString("bookurl").trim()
-                if (bookUrl.isBlank()) {
+                val bookUrlRaw = qreadReadMessageBookUrl(msg)
+                if (bookUrlRaw.isBlank()) {
                     qreadPushDebug { "read: empty bookurl" }
                     return
                 }
-                qreadPushDebug { "dispatch read bookUrl.len=${bookUrl.length}" }
+                val bookUrlNorm = normalizeQReadBookUrl(bookUrlRaw)
+                qreadPushDebug { "dispatch read bookUrl.len=${bookUrlNorm.length}" }
                 Coroutine.async {
-                    syncBookProgressByBookUrl(bookUrl)
+                    syncBookProgressByBookUrl(bookUrlRaw, bookUrlNorm)
                 }
-                postEvent(EventBus.QREAD_REMOTE_READ, bookUrl)
+                Handler(Looper.getMainLooper()).post {
+                    postEvent(EventBus.QREAD_REMOTE_READ, bookUrlNorm)
+                }
             }
 
             "bookmd5" -> {
@@ -860,21 +899,29 @@ object RemoteProgressBridge {
         }
     }
 
-    private suspend fun syncBookProgressByBookUrl(bookUrl: String) {
-        val local = appDb.bookDao.getBook(bookUrl) ?: return
+    private suspend fun syncBookProgressByBookUrl(rawFromPush: String, normalized: String) {
+        val local = appDb.bookDao.getBook(rawFromPush)
+            ?: appDb.bookDao.getBook(normalized)
+            ?: return
         val remote = getBookProgressQRead(local) ?: return
         if (remote.durChapterIndex > local.durChapterIndex ||
             (remote.durChapterIndex == local.durChapterIndex && remote.durChapterPos > local.durChapterPos)
         ) {
+            val chapterIndexChanged = remote.durChapterIndex != local.durChapterIndex
             local.durChapterIndex = remote.durChapterIndex
             local.durChapterPos = remote.durChapterPos
             if (!remote.durChapterTitle.isNullOrBlank()) {
                 local.durChapterTitle = remote.durChapterTitle
+            } else if (chapterIndexChanged) {
+                appDb.bookChapterDao.getChapter(local.bookUrl, remote.durChapterIndex)?.let {
+                    local.durChapterTitle = it.title
+                }
             }
             if (remote.durChapterTime > 0L) {
                 local.durChapterTime = remote.durChapterTime
             }
             appDb.bookDao.update(local)
+            postEvent(EventBus.BOOKSHELF_REFRESH, "")
         }
     }
 

@@ -66,6 +66,7 @@ import io.legado.app.utils.getCompatColor
 import io.legado.app.utils.gone
 import io.legado.app.utils.observeEvent
 import io.legado.app.utils.showDialogFragment
+import io.legado.app.utils.longToastOnUi
 import io.legado.app.utils.toastOnUi
 import io.legado.app.utils.toggleSystemBar
 import io.legado.app.utils.viewbindingdelegate.viewBinding
@@ -107,6 +108,7 @@ class ReadMangaActivity : VMBaseActivity<ActivityMangaBinding, ReadMangaViewMode
     }
 
     private var justInitData: Boolean = false
+    private var finishByQReadRemoteRead = false
     private var syncDialog: AlertDialog? = null
     private val mScrollTimer by lazy {
         ScrollTimer(this, binding.recyclerView, lifecycleScope).apply {
@@ -186,10 +188,21 @@ class ReadMangaActivity : VMBaseActivity<ActivityMangaBinding, ReadMangaViewMode
             upInfoBar(item)
         }
         observeEvent<String>(EventBus.QREAD_REMOTE_READ) { remoteBookUrl ->
-            val currentBookUrl = ReadManga.book?.bookUrl
-            if (!currentBookUrl.isNullOrBlank() && currentBookUrl == remoteBookUrl) {
-                toastOnUi("该书已在其他设备继续阅读，当前页面将退出")
-                finish()
+            val currentBookUrl = ReadManga.book?.bookUrl ?: return@observeEvent
+            if (currentBookUrl.isBlank()) return@observeEvent
+            if (RemoteProgressBridge.normalizeQReadBookUrl(currentBookUrl) ==
+                RemoteProgressBridge.normalizeQReadBookUrl(remoteBookUrl)
+            ) {
+                runOnUiThread {
+                    if (isFinishing || isDestroyed) return@runOnUiThread
+                    finishByQReadRemoteRead = true
+                    longToastOnUi("该书已在其他设备继续阅读，当前页面将退出")
+                    binding.recyclerView.postDelayed({
+                        if (!isFinishing && !isDestroyed) {
+                            finish()
+                        }
+                    }, 2000L)
+                }
             }
         }
     }
@@ -354,10 +367,16 @@ class ReadMangaActivity : VMBaseActivity<ActivityMangaBinding, ReadMangaViewMode
         super.onResume()
         networkChangedListener.register()
         networkChangedListener.onNetworkChanged = {}
-        if (ReadManga.inBookshelf && AppConfig.syncBookProgress) {
+        if (ReadManga.inBookshelf && RemoteProgressBridge.isProgressSyncEnabled()) {
             lifecycleScope.launch {
                 RemoteProgressBridge.startQReadPushIfEnabled()
-                ReadManga.syncProgress({ progress -> sureNewProgress(progress) })
+                if (AppConfig.remoteSyncMode.equals("qread", ignoreCase = true)) {
+                    ReadManga.book?.let { b ->
+                        RemoteProgressBridge.scheduleUploadOnReaderEnterQRead(BookProgress(b))
+                    }
+                } else {
+                    ReadManga.syncProgress({ progress -> sureNewProgress(progress) })
+                }
             }
         }
         if (enableAutoScrollPage) {
@@ -372,6 +391,14 @@ class ReadMangaActivity : VMBaseActivity<ActivityMangaBinding, ReadMangaViewMode
         super.onPause()
         if (ReadManga.inBookshelf) {
             ReadManga.saveRead()
+            if (!finishByQReadRemoteRead &&
+                RemoteProgressBridge.isProgressSyncEnabled() &&
+                AppConfig.remoteSyncMode.equals("qread", ignoreCase = true)
+            ) {
+                ReadManga.book?.let { b ->
+                    RemoteProgressBridge.scheduleUploadOnReaderExitQRead(BookProgress(b))
+                }
+            }
         }
         if (!BuildConfig.DEBUG) {
             Backup.autoBack(this)

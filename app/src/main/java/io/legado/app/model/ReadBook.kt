@@ -255,7 +255,7 @@ object ReadBook : CoroutineScope by MainScope() {
         uploadSuccessAction: (() -> Unit)? = null,
         syncSuccessAction: (() -> Unit)? = null
     ) {
-        if (!AppConfig.syncBookProgress) return
+        if (!RemoteProgressBridge.isProgressSyncEnabled()) return
         val book = book ?: return
         Coroutine.async {
             RemoteProgressBridge.getBookProgress(book)
