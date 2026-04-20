@@ -36,7 +36,6 @@ import org.json.JSONArray
 import org.json.JSONObject
 import android.os.Handler
 import android.os.Looper
-import java.util.concurrent.atomic.AtomicLong
 import splitties.init.appCtx
 import io.legado.app.model.ReadBook
 import io.legado.app.model.ReadManga
@@ -62,6 +61,8 @@ object RemoteProgressBridge {
     private const val QREAD_CLIENT_VERSION = "3.1.0"
     private const val QREAD_API_VERSION = 5
     private const val QREAD_PATH_GET_BOOKSHELF = "/api/%d/getBookshelf"
+    private const val QREAD_PATH_GET_BOOKSHELF_PAGE = "/api/%d/getBookshelfPage"
+    private const val QREAD_PATH_GET_BOOKSHELF_NEW = "/api/%d/getBookshelfNew"
     private const val QREAD_PATH_SAVE_BOOK_PROGRESS = "/api/%d/saveBookProgress"
     private const val QREAD_PATH_SAVE_BOOKS = "/api/%d/saveBooks"
     /** BookController：按 bookUrl 列表批量删除云端书架 */
@@ -75,6 +76,8 @@ object RemoteProgressBridge {
     private const val QREAD_PATH_WS = "/api/%d/ws"
     private const val PARAM_ACCESS_TOKEN = "accessToken"
     private const val PARAM_VERSION = "version"
+    private const val PARAM_MD5 = "md5"
+    private const val PARAM_PAGE = "page"
     private const val PARAM_NAME = "name"
     private const val PARAM_URL = "url"
     private const val PARAM_POS = "pos"
@@ -103,11 +106,17 @@ object RemoteProgressBridge {
     private const val TAG_QREAD_SYNC = "QReadSync"
     private const val QREAD_PUSH_MSG_LOG_MAX = 240
     private const val QREAD_PUSH_RECONNECT_DELAY_MS = 15_000L
+    private const val QREAD_HEARTBEAT_INTERVAL_MS = 30_000L
+    private const val QREAD_HEARTBEAT_PAYLOAD = """{"msg":"HEART_CHECK","message":"请求心跳"}"""
     @Volatile
     private var qreadSocket: WebSocket? = null
     @Volatile
     private var qreadSocketConnecting = false
-    private val qreadConnectSeq = AtomicLong(0)
+    @Volatile
+    private var qreadHeartbeatSeq = 0L
+    private var qreadBookMd5: String? = null
+    private var qreadSourceMd5: String? = null
+    private var qreadRssMd5: String? = null
 
     /**
      * 统一同步开关语义：
@@ -125,18 +134,71 @@ object RemoteProgressBridge {
 
     private inline fun qreadPushDebug(lazyMsg: () -> String) {
         if (BuildConfig.DEBUG || AppConfig.recordLog) {
-            LogUtils.d(TAG_QREAD_PUSH, lazyMsg)
+            val msg = lazyMsg()
+            LogUtils.d(TAG_QREAD_PUSH, msg)
+            if (AppConfig.recordLog) {
+                AppLog.putNotSave("[$TAG_QREAD_PUSH] $msg")
+            }
         }
     }
 
     private inline fun qreadSyncDebug(lazyMsg: () -> String) {
         if (BuildConfig.DEBUG || AppConfig.recordLog) {
-            LogUtils.d(TAG_QREAD_SYNC, lazyMsg)
+            val msg = lazyMsg()
+            LogUtils.d(TAG_QREAD_SYNC, msg)
+            if (AppConfig.recordLog) {
+                AppLog.putNotSave("[$TAG_QREAD_SYNC] $msg")
+            }
         }
     }
 
-    private fun throwableInfo(t: Throwable): String {
-        return t.localizedMessage ?: t.message ?: t.toString()
+    private fun stopQReadHeartbeat() {
+        qreadHeartbeatSeq++
+    }
+
+    private fun startQReadHeartbeat(webSocket: WebSocket) {
+        val seq = ++qreadHeartbeatSeq
+        qreadPushDebug { "heartbeat start interval=${QREAD_HEARTBEAT_INTERVAL_MS}ms" }
+        Coroutine.async {
+            while (qreadHeartbeatSeq == seq && qreadSocket === webSocket) {
+                delay(QREAD_HEARTBEAT_INTERVAL_MS)
+                if (qreadHeartbeatSeq != seq || qreadSocket !== webSocket) break
+                val sent = runCatching { webSocket.send(QREAD_HEARTBEAT_PAYLOAD) }.getOrDefault(false)
+                qreadPushDebug { "heartbeat send ok=$sent" }
+                if (!sent) break
+            }
+            qreadPushDebug { "heartbeat stop seq=$seq" }
+        }
+    }
+
+    /**
+     * 对齐网页端策略：
+     * - 首次收到 md5 仅记忆，不触发同步
+     * - 后续只有 md5 变化才触发同步
+     */
+    @Synchronized
+    private fun shouldSyncOnMd5(kind: String, md5: String): Boolean {
+        return when (kind) {
+            "bookmd5" -> {
+                val old = qreadBookMd5
+                qreadBookMd5 = md5
+                old != null && old != md5
+            }
+
+            "sourcemd5" -> {
+                val old = qreadSourceMd5
+                qreadSourceMd5 = md5
+                old != null && old != md5
+            }
+
+            "rssmd5" -> {
+                val old = qreadRssMd5
+                qreadRssMd5 = md5
+                old != null && old != md5
+            }
+
+            else -> false
+        }
     }
 
     /** WebSocket URL 日志脱敏：不输出 token */
@@ -162,13 +224,26 @@ object RemoteProgressBridge {
     private fun isBookOpenInReader(bookUrl: String): Boolean {
         if (bookUrl.isBlank()) return false
         val n = normalizeQReadBookUrl(bookUrl)
-        ReadBook.book?.bookUrl?.takeIf { it.isNotBlank() }?.let {
-            if (normalizeQReadBookUrl(it) == n) return true
+        ReadBook.callBack?.let {
+            ReadBook.book?.bookUrl?.takeIf { u -> u.isNotBlank() }?.let { u ->
+                if (normalizeQReadBookUrl(u) == n) return true
+            }
         }
-        ReadManga.book?.bookUrl?.takeIf { it.isNotBlank() }?.let {
-            if (normalizeQReadBookUrl(it) == n) return true
+        ReadManga.mCallback?.let {
+            ReadManga.book?.bookUrl?.takeIf { u -> u.isNotBlank() }?.let { u ->
+                if (normalizeQReadBookUrl(u) == n) return true
+            }
         }
         return false
+    }
+
+    private fun shouldDeleteByRemoteMissing(book: Book, remoteUrls: Set<String>): Boolean {
+        if ((book.type and BookType.local) != 0) return false
+        if (book.bookUrl.isBlank()) return false
+        val normalized = normalizeQReadBookUrl(book.bookUrl)
+        if (normalized in remoteUrls) return false
+        if (isBookOpenInReader(book.bookUrl)) return false
+        return true
     }
 
     suspend fun uploadBookProgress(
@@ -176,9 +251,6 @@ object RemoteProgressBridge {
         toast: Boolean = false,
         onSuccess: (() -> Unit)? = null
     ) {
-        qreadSyncDebug {
-            "uploadBookProgress(book) mode=${AppConfig.remoteSyncMode} name=${book.name} urlLen=${book.bookUrl.length} toast=$toast"
-        }
         withContext(Dispatchers.IO) {
             when (RemoteSyncMode.fromValue(AppConfig.remoteSyncMode)) {
                 RemoteSyncMode.LOCAL_ONLY -> onSuccess?.invoke()
@@ -194,7 +266,8 @@ object RemoteProgressBridge {
         ensureShelf: Boolean = false
     ) {
         qreadSyncDebug {
-            "uploadBookProgress(progress) mode=${AppConfig.remoteSyncMode} name=${progress.name} chapter=${progress.durChapterIndex} pos=${progress.durChapterPos} ensureShelf=$ensureShelf"
+            "uploadBookProgress(progress) name=${progress.name} idx=${progress.durChapterIndex} " +
+                "pos=${progress.durChapterPos} ensureShelf=$ensureShelf mode=${AppConfig.remoteSyncMode}"
         }
         withContext(Dispatchers.IO) {
             when (RemoteSyncMode.fromValue(AppConfig.remoteSyncMode)) {
@@ -207,6 +280,9 @@ object RemoteProgressBridge {
 
     fun scheduleUploadOnChapterChanged(progress: BookProgress) {
         if (!isProgressSyncEnabled()) return
+        qreadSyncDebug {
+            "trigger chapterChanged save name=${progress.name} idx=${progress.durChapterIndex} pos=${progress.durChapterPos}"
+        }
         Coroutine.async {
             uploadBookProgress(progress)
         }
@@ -218,6 +294,9 @@ object RemoteProgressBridge {
     fun scheduleUploadOnReaderExitQRead(progress: BookProgress) {
         if (!isProgressSyncEnabled()) return
         if (!AppConfig.remoteSyncMode.equals(MODE_QREAD, true)) return
+        qreadSyncDebug {
+            "trigger readerExit save name=${progress.name} idx=${progress.durChapterIndex} pos=${progress.durChapterPos}"
+        }
         Coroutine.async {
             uploadBookProgress(progress, ensureShelf = false)
         }
@@ -229,15 +308,15 @@ object RemoteProgressBridge {
     fun scheduleUploadOnReaderEnterQRead(progress: BookProgress) {
         if (!isProgressSyncEnabled()) return
         if (!AppConfig.remoteSyncMode.equals(MODE_QREAD, true)) return
+        qreadSyncDebug {
+            "trigger readerEnter save name=${progress.name} idx=${progress.durChapterIndex} pos=${progress.durChapterPos}"
+        }
         Coroutine.async {
             uploadBookProgress(progress, ensureShelf = false)
         }
     }
 
     suspend fun getBookProgress(book: Book): BookProgress? {
-        qreadSyncDebug {
-            "getBookProgress mode=${AppConfig.remoteSyncMode} name=${book.name} urlLen=${book.bookUrl.length}"
-        }
         return withContext(Dispatchers.IO) {
             when (RemoteSyncMode.fromValue(AppConfig.remoteSyncMode)) {
                 RemoteSyncMode.LOCAL_ONLY -> null
@@ -259,7 +338,6 @@ object RemoteProgressBridge {
     }
 
     suspend fun fullSyncOnStartup() {
-        qreadSyncDebug { "fullSyncOnStartup mode=${AppConfig.remoteSyncMode}" }
         when (RemoteSyncMode.fromValue(AppConfig.remoteSyncMode)) {
             RemoteSyncMode.LOCAL_ONLY -> Unit
             RemoteSyncMode.WEBDAV -> downloadAllBookProgress()
@@ -291,15 +369,13 @@ object RemoteProgressBridge {
             qreadPushDebug { "abort: qreadWebSocketUrl null (invalid baseUrl scheme?)" }
             return
         }
-        val connectId = qreadConnectSeq.incrementAndGet()
-        qreadPushDebug { "connect#$connectId ${maskQreadWebSocketUrlForLog(wsUrl)}" }
+        qreadPushDebug { "connect ${maskQreadWebSocketUrlForLog(wsUrl)}" }
         val request = Request.Builder().url(wsUrl).build()
         qreadSocket = okHttpClient.newWebSocket(request, object : WebSocketListener() {
             override fun onOpen(webSocket: WebSocket, response: Response) {
                 qreadSocketConnecting = false
-                qreadPushDebug {
-                    "onOpen#$connectId http=${response.code} ${response.message} accept=${response.header("Sec-WebSocket-Accept") ?: "null"}"
-                }
+                qreadPushDebug { "onOpen http=${response.code} ${response.message}" }
+                startQReadHeartbeat(webSocket)
             }
 
             override fun onMessage(webSocket: WebSocket, text: String) {
@@ -308,19 +384,21 @@ object RemoteProgressBridge {
                 } else {
                     text.take(QREAD_PUSH_MSG_LOG_MAX) + "…(${text.length})"
                 }
-                qreadPushDebug { "onMessage#$connectId len=${text.length} $snippet" }
+                qreadPushDebug { "onMessage len=${text.length} $snippet" }
                 handleQReadPushMessage(text)
             }
 
             override fun onFailure(webSocket: WebSocket, t: Throwable, response: Response?) {
                 qreadSocket = null
                 qreadSocketConnecting = false
+                stopQReadHeartbeat()
+                val err = t.localizedMessage ?: t.message ?: t.javaClass.simpleName
                 qreadPushDebug {
-                    "onFailure#$connectId http=${response?.code} ${response?.message} err=${t.javaClass.simpleName}: ${throwableInfo(t)}"
+                    "onFailure http=${response?.code} ${response?.message} err=${t.javaClass.simpleName}: $err"
                 }
-                AppLog.put("QRead推送连接失败#$connectId: ${throwableInfo(t)}", t)
+                AppLog.put("QRead推送连接失败: $err", t)
                 Coroutine.async {
-                    qreadPushDebug { "reconnect#$connectId in ${QREAD_PUSH_RECONNECT_DELAY_MS}ms" }
+                    qreadPushDebug { "reconnect in ${QREAD_PUSH_RECONNECT_DELAY_MS}ms" }
                     delay(QREAD_PUSH_RECONNECT_DELAY_MS)
                     startQReadPushIfEnabled()
                 }
@@ -329,7 +407,8 @@ object RemoteProgressBridge {
             override fun onClosed(webSocket: WebSocket, code: Int, reason: String) {
                 qreadSocket = null
                 qreadSocketConnecting = false
-                qreadPushDebug { "onClosed#$connectId code=$code reason=$reason" }
+                stopQReadHeartbeat()
+                qreadPushDebug { "onClosed code=$code reason=$reason" }
             }
         })
     }
@@ -370,23 +449,39 @@ object RemoteProgressBridge {
                     return
                 }
                 val bookUrlNorm = normalizeQReadBookUrl(bookUrlRaw)
-                qreadPushDebug { "dispatch read(bookUrl.len=${bookUrlNorm.length}) -> only event, no get" }
+                qreadPushDebug { "dispatch read(bookUrl.len=${bookUrlNorm.length}) -> update single book progress" }
+                Coroutine.async {
+                    syncBookProgressByPushBookUrl(bookUrlRaw, bookUrlNorm)
+                }
                 Handler(Looper.getMainLooper()).post {
                     postEvent(EventBus.QREAD_REMOTE_READ, bookUrlNorm)
                 }
             }
 
             "bookmd5" -> {
-                qreadPushDebug { "dispatch bookmd5 -> downloadAllBookProgress" }
+                val md5 = msg.optString("md5").trim()
+                val shouldSync = shouldSyncOnMd5(kind, md5)
+                if (!shouldSync) {
+                    qreadPushDebug { "bookmd5 cache-only md5.len=${md5.length}" }
+                    return
+                }
+                qreadPushDebug { "dispatch bookmd5 changed -> downloadAllBookProgress md5.len=${md5.length}" }
                 Coroutine.async {
                     downloadAllBookProgress()
                 }
             }
 
             "sourcemd5", "rssmd5" -> {
-                qreadPushDebug { "dispatch $kind -> syncQReadSourcesIfEnabled" }
+                val md5 = msg.optString("md5").trim()
+                val shouldSync = shouldSyncOnMd5(kind, md5)
+                if (!shouldSync) {
+                    qreadPushDebug { "$kind cache-only md5.len=${md5.length}" }
+                    return
+                }
+                qreadPushDebug { "dispatch $kind changed -> syncQReadSourcesIfEnabled md5.len=${md5.length}" }
                 Coroutine.async {
-                    syncQReadSourcesIfEnabled()
+                    val result = syncQReadSourcesIfEnabled()
+                    qreadSyncDebug { "push $kind sync done book=${result.first} rss=${result.second}" }
                 }
             }
 
@@ -611,10 +706,10 @@ object RemoteProgressBridge {
         if (!AppConfig.remoteSyncMode.equals(MODE_QREAD, true)) {
             return 0 to 0
         }
-        qreadSyncDebug { "syncQReadSourcesIfEnabled start" }
+        qreadSyncDebug { "syncQReadSources start" }
         val bookCount = syncBookSourcesFromQRead()
         val rssCount = syncRssSourcesFromQRead()
-        qreadSyncDebug { "syncQReadSourcesIfEnabled done book=$bookCount rss=$rssCount" }
+        qreadSyncDebug { "syncQReadSources done book=$bookCount rss=$rssCount" }
         return bookCount to rssCount
     }
 
@@ -637,10 +732,11 @@ object RemoteProgressBridge {
         val token = AppConfig.qreadToken
         val bookUrl = book?.bookUrl.orEmpty()
         if (baseUrl.isBlank() || token.isBlank() || bookUrl.isBlank()) return
-        qreadSyncDebug {
-            "uploadBookProgressQRead request name=${progress.name} urlLen=${bookUrl.length} chapter=${progress.durChapterIndex} pos=${progress.durChapterPos} ensureShelf=$ensureShelf"
-        }
         try {
+            qreadSyncDebug {
+                "saveBookProgress start bookUrl.len=${bookUrl.length} idx=${progress.durChapterIndex} " +
+                    "pos=${progress.durChapterPos} ensureShelf=$ensureShelf"
+            }
             if (ensureShelf && book != null && !ensureBookOnQReadShelf(baseUrl, token, book)) {
                 AppLog.put("QRead书架缺书且自动入架失败, bookUrl=$bookUrl")
                 return
@@ -676,7 +772,7 @@ object RemoteProgressBridge {
                 }
             }
             if (uploadOk) {
-                qreadSyncDebug { "uploadBookProgressQRead success urlLen=${bookUrl.length}" }
+                qreadSyncDebug { "saveBookProgress success bookUrl.len=${bookUrl.length}" }
                 onSuccess?.invoke()
             } else {
                 AppLog.put("QRead上传进度失败, bookUrl=$bookUrl")
@@ -924,14 +1020,53 @@ object RemoteProgressBridge {
         }
     }
 
+    private suspend fun syncBookProgressByPushBookUrl(rawFromPush: String, normalized: String) {
+        val local = appDb.bookDao.getBook(rawFromPush)
+            ?: appDb.bookDao.getBook(normalized)
+            ?: appDb.bookDao.webBooks.firstOrNull {
+                normalizeQReadBookUrl(it.bookUrl) == normalized
+            }
+            ?: return
+        val remote = getBookProgressQRead(local) ?: return
+        qreadSyncDebug {
+            "read-sync compare local=${local.durChapterIndex}/${local.durChapterPos} " +
+                "remote=${remote.durChapterIndex}/${remote.durChapterPos} bookUrl.len=${local.bookUrl.length}"
+        }
+        val changed = remote.durChapterIndex != local.durChapterIndex ||
+            remote.durChapterPos != local.durChapterPos ||
+            (!remote.durChapterTitle.isNullOrBlank() && remote.durChapterTitle != local.durChapterTitle) ||
+            (remote.durChapterTime > 0L && remote.durChapterTime != local.durChapterTime)
+        if (!changed) {
+            qreadSyncDebug { "read-sync skip: no change" }
+            return
+        }
+        local.durChapterIndex = remote.durChapterIndex
+        local.durChapterPos = remote.durChapterPos
+        if (!remote.durChapterTitle.isNullOrBlank()) {
+            local.durChapterTitle = remote.durChapterTitle
+        }
+        if (remote.durChapterTime > 0L) {
+            local.durChapterTime = remote.durChapterTime
+        }
+        appDb.bookDao.update(local)
+        qreadSyncDebug {
+            "read-sync updated local to ${local.durChapterIndex}/${local.durChapterPos} title=${local.durChapterTitle}"
+        }
+        if (!isBookOpenInReader(local.bookUrl)) {
+            qreadSyncDebug { "read-sync dispatch UP_BOOKSHELF bookUrl.len=${local.bookUrl.length}" }
+            postEvent(EventBus.UP_BOOKSHELF, local.bookUrl)
+        }
+    }
+
     private suspend fun fetchBookProgressListQRead(
         baseUrl: String,
         token: String,
         name: String? = null
     ): List<QReadBookProgressPayload> {
-        qreadSyncDebug {
-            "fetchBookProgressListQRead request name=${name?.takeIf { it.isNotBlank() } ?: "<all>"}"
+        if (name.isNullOrBlank()) {
+            return fetchBookProgressListQReadByPage(baseUrl, token)
         }
+        qreadSyncDebug { "getBookshelf start hasName=${!name.isNullOrBlank()}" }
         val requestUrl = "$baseUrl${QREAD_PATH_GET_BOOKSHELF.format(QREAD_API_VERSION)}".toHttpUrl()
             .newBuilder()
             .addQueryParameter(PARAM_ACCESS_TOKEN, token)
@@ -961,77 +1096,94 @@ object RemoteProgressBridge {
                 return@use emptyList()
             }
             val dataArray = root.optJSONArray(QREAD_DATA) ?: return@use emptyList()
-            val result = mutableListOf<QReadBookProgressPayload>()
-            for (i in 0 until dataArray.length()) {
-                val item = dataArray.optJSONObject(i) ?: continue
-                result.add(
-                    QReadBookProgressPayload(
-                        name = item.optString(QREAD_NAME),
-                        author = item.optString(QREAD_AUTHOR),
-                        bookUrl = item.optString(QREAD_BOOK_URL),
-                        durChapterIndex = item.optInt(QREAD_DUR_CHAPTER_INDEX, 0),
-                        durChapterPos = item.optDouble(QREAD_DUR_CHAPTER_POS, 0.0).toInt(),
-                        durChapterTime = item.optLong(QREAD_DUR_CHAPTER_TIME, 0L),
-                        durChapterTitle = item.optString(QREAD_DUR_CHAPTER_TITLE).ifBlank { null },
-                        sourceJsonForShelf = item.toString()
-                    )
-                )
-            }
-            qreadSyncDebug {
-                "fetchBookProgressListQRead success size=${result.size} name=${name?.takeIf { it.isNotBlank() } ?: "<all>"}"
-            }
+            val result = parseQReadProgressPayloads(dataArray)
+            qreadSyncDebug { "getBookshelf done count=${result.size} hasName=${!name.isNullOrBlank()}" }
             result
         }
     }
 
-    private suspend fun syncBookProgressBidirectionalQRead() {
-        val baseUrl = AppConfig.qreadBaseUrl.trimEnd('/')
-        val token = AppConfig.qreadToken
-        if (baseUrl.isBlank() || token.isBlank()) return
-        val remoteList = fetchBookProgressListQRead(baseUrl, token)
-        val remoteByUrl = remoteList
-            .mapNotNull { payload -> payload.bookUrl?.trim()?.takeIf { it.isNotBlank() }?.let { it to payload } }
-            .toMap()
-            .toMutableMap()
-        val remoteByNameAuthor = remoteList.associateBy { it.name to it.author }.toMutableMap()
-        appDb.bookDao.webBooks.forEach { local ->
-            currentCoroutineContext().ensureActive()
-            if ((local.type and BookType.local) != 0 || local.bookUrl.isBlank()) return@forEach
-            val remote = remoteByUrl.remove(local.bookUrl) ?: remoteByNameAuthor.remove(local.name to local.author)
-            if (remote == null) {
-                ensureBookOnQReadShelf(baseUrl, token, local)
-                uploadBookProgressQRead(local, BookProgress(local), null)
-                return@forEach
-            }
-            val remoteProgress = remote.toBookProgress()
-            val remoteAhead =
-                remoteProgress.durChapterIndex > local.durChapterIndex ||
-                    (remoteProgress.durChapterIndex == local.durChapterIndex &&
-                        remoteProgress.durChapterPos > local.durChapterPos)
-            if (remoteAhead) {
-                local.durChapterIndex = remoteProgress.durChapterIndex
-                local.durChapterPos = remoteProgress.durChapterPos
-                if (!remoteProgress.durChapterTitle.isNullOrBlank()) {
-                    local.durChapterTitle = remoteProgress.durChapterTitle
-                }
-                if (remoteProgress.durChapterTime > 0L) {
-                    local.durChapterTime = remoteProgress.durChapterTime
-                }
-                appDb.bookDao.update(local)
-            } else if (remoteProgress.durChapterIndex < local.durChapterIndex ||
-                (remoteProgress.durChapterIndex == local.durChapterIndex &&
-                    remoteProgress.durChapterPos < local.durChapterPos)
-            ) {
-                uploadBookProgressQRead(local, BookProgress(local), null)
-            }
+    private fun parseQReadProgressPayloads(dataArray: JSONArray): MutableList<QReadBookProgressPayload> {
+        val result = mutableListOf<QReadBookProgressPayload>()
+        for (i in 0 until dataArray.length()) {
+            val item = dataArray.optJSONObject(i) ?: continue
+            result.add(
+                QReadBookProgressPayload(
+                    name = item.optString(QREAD_NAME),
+                    author = item.optString(QREAD_AUTHOR),
+                    bookUrl = item.optString(QREAD_BOOK_URL),
+                    durChapterIndex = item.optInt(QREAD_DUR_CHAPTER_INDEX, 0),
+                    durChapterPos = item.optDouble(QREAD_DUR_CHAPTER_POS, 0.0).toInt(),
+                    durChapterTime = item.optLong(QREAD_DUR_CHAPTER_TIME, 0L),
+                    durChapterTitle = item.optString(QREAD_DUR_CHAPTER_TITLE).ifBlank { null },
+                    sourceJsonForShelf = item.toString()
+                )
+            )
         }
-        remoteByUrl.values.forEach { payload ->
-            currentCoroutineContext().ensureActive()
-            val newBook = payload.toShelfBook() ?: return@forEach
-            if (appDb.bookDao.getBook(newBook.bookUrl) == null) {
-                appDb.bookDao.insert(newBook)
+        return result
+    }
+
+    private suspend fun fetchBookProgressListQReadByPage(
+        baseUrl: String,
+        token: String
+    ): List<QReadBookProgressPayload> {
+        qreadSyncDebug { "getBookshelfPage start" }
+        val pageMetaUrl = "$baseUrl${QREAD_PATH_GET_BOOKSHELF_PAGE.format(QREAD_API_VERSION)}".toHttpUrl()
+            .newBuilder()
+            .addQueryParameter(PARAM_ACCESS_TOKEN, token)
+            .build()
+        val pageMetaRequest = Request.Builder().url(pageMetaUrl).get().build()
+        val meta = okHttpClient.newCall(pageMetaRequest).execute().use { response ->
+            if (!response.isSuccessful) {
+                AppLog.put("$LOG_QREAD_PREFIX getBookshelfPage HTTP ${response.code}")
+                return emptyList()
             }
+            val body = response.body.string()
+            val root = runCatching { JSONObject(body) }.getOrNull() ?: return emptyList()
+            if (!root.optBoolean(QREAD_IS_SUCCESS, false)) {
+                val errorMsg = root.optString(QREAD_ERROR_MSG)
+                if (errorMsg.isNotBlank()) {
+                    AppLog.put("$LOG_QREAD_PREFIX getBookshelfPage isSuccess=false, error=$errorMsg")
+                }
+                return emptyList()
+            }
+            root.optJSONObject(QREAD_DATA) ?: return emptyList()
         }
+        val totalPage = meta.optInt(PARAM_PAGE, 0)
+        val md5 = meta.optString(PARAM_MD5).orEmpty()
+        if (totalPage <= 0 || md5.isBlank()) {
+            qreadSyncDebug { "getBookshelfPage done empty page=$totalPage md5Blank=${md5.isBlank()}" }
+            return emptyList()
+        }
+        val all = mutableListOf<QReadBookProgressPayload>()
+        for (page in 1..totalPage) {
+            val requestUrl = "$baseUrl${QREAD_PATH_GET_BOOKSHELF_NEW.format(QREAD_API_VERSION)}".toHttpUrl()
+                .newBuilder()
+                .addQueryParameter(PARAM_ACCESS_TOKEN, token)
+                .addQueryParameter(PARAM_MD5, md5)
+                .addQueryParameter(PARAM_PAGE, page.toString())
+                .build()
+            val request = Request.Builder().url(requestUrl).get().build()
+            val onePage = okHttpClient.newCall(request).execute().use { response ->
+                if (!response.isSuccessful) {
+                    AppLog.put("$LOG_QREAD_PREFIX getBookshelfNew HTTP ${response.code}, page=$page")
+                    return@use emptyList<QReadBookProgressPayload>()
+                }
+                val body = response.body.string()
+                val root = runCatching { JSONObject(body) }.getOrNull() ?: return@use emptyList<QReadBookProgressPayload>()
+                if (!root.optBoolean(QREAD_IS_SUCCESS, false)) {
+                    val errorMsg = root.optString(QREAD_ERROR_MSG)
+                    if (errorMsg.isNotBlank()) {
+                        AppLog.put("$LOG_QREAD_PREFIX getBookshelfNew isSuccess=false, page=$page, error=$errorMsg")
+                    }
+                    return@use emptyList<QReadBookProgressPayload>()
+                }
+                val dataArray = root.optJSONArray(QREAD_DATA) ?: return@use emptyList<QReadBookProgressPayload>()
+                parseQReadProgressPayloads(dataArray)
+            }
+            all.addAll(onePage)
+        }
+        qreadSyncDebug { "getBookshelfPage done page=$totalPage total=${all.size}" }
+        return all
     }
 
     private suspend fun downloadAllBookProgressQRead() {
@@ -1040,10 +1192,15 @@ object RemoteProgressBridge {
         if (baseUrl.isBlank() || token.isBlank()) return
         val progressList = fetchBookProgressListQRead(baseUrl, token)
         if (progressList.isEmpty()) return
-
+        qreadSyncDebug { "downloadAllBookProgressQRead start count=${progressList.size}" }
         var updated = 0
         var inserted = 0
-        var bookshelfEvent = 0
+        var deleted = 0
+        val remoteUrls = progressList
+            .mapNotNull { it.bookUrl?.trim()?.takeIf { u -> u.isNotBlank() } }
+            .map { normalizeQReadBookUrl(it) }
+            .toSet()
+
         progressList.forEach { payload ->
             val progress = payload.toBookProgress()
             val bookUrl = payload.bookUrl?.trim().orEmpty()
@@ -1069,7 +1226,6 @@ object RemoteProgressBridge {
                     updated++
                     if (!isBookOpenInReader(existing.bookUrl)) {
                         postEvent(EventBus.UP_BOOKSHELF, existing.bookUrl)
-                        bookshelfEvent++
                     }
                 }
             } else {
@@ -1079,14 +1235,16 @@ object RemoteProgressBridge {
                     inserted++
                     if (!isBookOpenInReader(newBook.bookUrl)) {
                         postEvent(EventBus.UP_BOOKSHELF, newBook.bookUrl)
-                        bookshelfEvent++
                     }
                 }
             }
         }
-        qreadSyncDebug {
-            "downloadAllBookProgressQRead done total=${progressList.size} updated=$updated inserted=$inserted event=$bookshelfEvent"
+        appDb.bookDao.webBooks.forEach { local ->
+            if (!shouldDeleteByRemoteMissing(local, remoteUrls)) return@forEach
+            appDb.bookDao.delete(local)
+            deleted++
         }
+        qreadSyncDebug { "downloadAllBookProgressQRead done updated=$updated inserted=$inserted deleted=$deleted" }
     }
 }
 
