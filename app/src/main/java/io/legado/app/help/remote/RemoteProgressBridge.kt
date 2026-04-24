@@ -17,7 +17,9 @@ import io.legado.app.help.http.okHttpClient
 import io.legado.app.utils.GSON
 import io.legado.app.utils.fromJsonArray
 import io.legado.app.utils.fromJsonObject
+import io.legado.app.utils.getPrefString
 import io.legado.app.utils.getPrefStringSet
+import io.legado.app.utils.putPrefString
 import io.legado.app.utils.putPrefStringSet
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
@@ -102,6 +104,7 @@ object RemoteProgressBridge {
     private const val QREAD_CONTENT_TYPE_JSON = "application/json; charset=utf-8"
     private const val LOG_QREAD_PREFIX = "QRead请求失败"
     private const val MODE_QREAD = "qread"
+    private const val QREAD_GROUP_TAG_MANUAL_ENABLE = "local"
     private const val TAG_QREAD_PUSH = "QReadPush"
     private const val QREAD_PUSH_MSG_LOG_MAX = 240
     private const val QREAD_PUSH_RECONNECT_DELAY_MS = 15_000L
@@ -230,6 +233,18 @@ object RemoteProgressBridge {
         if (normalized in remoteUrls) return false
         if (isBookOpenInReader(book.bookUrl)) return false
         return true
+    }
+
+    /**
+     * 分组包含短标签 [QREAD_GROUP_TAG_MANUAL_ENABLE] 时，
+     * 同步只更新内容，不覆盖本地 enabled 状态（由用户手动开关）。
+     */
+    private fun keepLocalEnableByGroup(group: String?): Boolean {
+        val g = group?.trim().orEmpty()
+        if (g.isBlank()) return false
+        return g.split(',', '，', ';', '；', '|')
+            .map { it.trim() }
+            .any { it.equals(QREAD_GROUP_TAG_MANUAL_ENABLE, true) }
     }
 
     suspend fun uploadBookProgress(
@@ -625,8 +640,16 @@ object RemoteProgressBridge {
         val summaryMap = summaries.associateBy { it.bookSourceUrl }
         sources.forEach { source ->
             val summary = summaryMap[source.bookSourceUrl] ?: return emptyList()
-            source.enabled = summary.enabled
-            source.enabledExplore = summary.enabledExplore
+            val keepLocalEnable = keepLocalEnableByGroup(summary.bookSourceGroup)
+            if (keepLocalEnable) {
+                appDb.bookSourceDao.getBookSource(source.bookSourceUrl)?.let { local ->
+                    source.enabled = local.enabled
+                    source.enabledExplore = local.enabledExplore
+                }
+            } else {
+                source.enabled = summary.enabled
+                source.enabledExplore = summary.enabledExplore
+            }
             source.bookSourceGroup = summary.bookSourceGroup
         }
         return sources
@@ -644,7 +667,16 @@ object RemoteProgressBridge {
                 val rssSources = mutableListOf<RssSource>()
                 summaries.forEach { summary ->
                     val source = fetchRssSourceDetailQRead(baseUrl, token, summary.sourceUrl) ?: return@forEach
-                    source.enabled = summary.enabled
+                    val keepLocalEnable = keepLocalEnableByGroup(summary.sourceGroup)
+                    if (keepLocalEnable) {
+                        appDb.rssSourceDao.getByKey(summary.sourceUrl)?.let { local ->
+                            source.enabled = local.enabled
+                        } ?: run {
+                            source.enabled = summary.enabled
+                        }
+                    } else {
+                        source.enabled = summary.enabled
+                    }
                     source.sourceGroup = summary.sourceGroup
                     rssSources.add(source)
                 }
