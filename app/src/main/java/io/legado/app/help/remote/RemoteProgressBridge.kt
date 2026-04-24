@@ -113,9 +113,6 @@ object RemoteProgressBridge {
     private var qreadSocketConnecting = false
     @Volatile
     private var qreadHeartbeatSeq = 0L
-    private var qreadBookMd5: String? = null
-    private var qreadSourceMd5: String? = null
-    private var qreadRssMd5: String? = null
 
     /**
      * 统一同步开关语义：
@@ -169,20 +166,20 @@ object RemoteProgressBridge {
     private fun shouldSyncOnMd5(kind: String, md5: String): Boolean {
         return when (kind) {
             "bookmd5" -> {
-                val old = qreadBookMd5
-                qreadBookMd5 = md5
+                val old = appCtx.getPrefString(PreferKey.qreadLastBookMd5)
+                appCtx.putPrefString(PreferKey.qreadLastBookMd5, md5)
                 old != null && old != md5
             }
 
             "sourcemd5" -> {
-                val old = qreadSourceMd5
-                qreadSourceMd5 = md5
+                val old = appCtx.getPrefString(PreferKey.qreadLastSourceMd5)
+                appCtx.putPrefString(PreferKey.qreadLastSourceMd5, md5)
                 old != null && old != md5
             }
 
             "rssmd5" -> {
-                val old = qreadRssMd5
-                qreadRssMd5 = md5
+                val old = appCtx.getPrefString(PreferKey.qreadLastRssMd5)
+                appCtx.putPrefString(PreferKey.qreadLastRssMd5, md5)
                 old != null && old != md5
             }
 

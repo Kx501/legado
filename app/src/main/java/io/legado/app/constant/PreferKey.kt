@@ -190,6 +190,9 @@ object PreferKey {
     const val qreadToken = "qreadToken"
     const val qreadManagedBookSourceUrls = "qreadManagedBookSourceUrls"
     const val qreadManagedRssSourceUrls = "qreadManagedRssSourceUrls"
+    const val qreadLastBookMd5 = "qreadLastBookMd5"
+    const val qreadLastSourceMd5 = "qreadLastSourceMd5"
+    const val qreadLastRssMd5 = "qreadLastRssMd5"
 
     const val dThemeName = "durThemeName"
     const val dNThemeName = "durThemeNameNight"
