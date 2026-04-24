@@ -405,7 +405,7 @@ class BackupConfigFragment : PreferenceFragment(),
         baseUrl: String,
         username: String,
         password: String
-    ): String? {
+    ): String {
         val loginUrl = "$baseUrl${QREAD_LOGIN_PATH_TEMPLATE.format(QREAD_API_VERSION)}"
         val body = FormBody.Builder()
             .add(QREAD_PARAM_USERNAME, username)

@@ -317,7 +317,7 @@ object RemoteProgressBridge {
     suspend fun downloadAllBookProgress() {
         withContext(Dispatchers.IO) {
             when (RemoteSyncMode.fromValue(AppConfig.remoteSyncMode)) {
-                RemoteSyncMode.LOCAL_ONLY -> Unit
+                RemoteSyncMode.LOCAL_ONLY -> {}
                 RemoteSyncMode.WEBDAV -> AppWebDav.downloadAllBookProgress()
                 RemoteSyncMode.QREAD -> downloadAllBookProgressQRead()
             }
@@ -326,7 +326,7 @@ object RemoteProgressBridge {
 
     suspend fun fullSyncOnStartup() {
         when (RemoteSyncMode.fromValue(AppConfig.remoteSyncMode)) {
-            RemoteSyncMode.LOCAL_ONLY -> Unit
+            RemoteSyncMode.LOCAL_ONLY -> {}
             RemoteSyncMode.WEBDAV -> downloadAllBookProgress()
             RemoteSyncMode.QREAD -> {
                 // Align with QRead client startup behavior: connect push first.
@@ -427,8 +427,7 @@ object RemoteProgressBridge {
             qreadPushDebug { "drop: not JSON, head=${text.take(80)}" }
             return
         }
-        val kind = msg.optString("msg")
-        when (kind) {
+        when (val kind = msg.optString("msg")) {
             "read" -> {
                 val bookUrlRaw = qreadReadMessageBookUrl(msg)
                 if (bookUrlRaw.isBlank()) {
@@ -484,6 +483,7 @@ object RemoteProgressBridge {
      * 服务端已有同 bookUrl 或同名作者的记录会跳过。
      * 仅建议在**备份恢复**等批量 `insert`、未走 [Book.save] 的场景调用；日常加删靠入架/删架钩子即可。
      */
+    @Suppress("unused")
     suspend fun uploadLocalShelfToQRead(): Int {
         if (!AppConfig.remoteSyncMode.equals(MODE_QREAD, true)) return 0
         val baseUrl = AppConfig.qreadBaseUrl.trimEnd('/')
@@ -521,7 +521,6 @@ object RemoteProgressBridge {
     fun scheduleSyncBookToQReadShelfIfEnabled(book: Book) {
         Coroutine.async {
             syncBookToQReadShelfIfEnabled(book)
-            Unit
         }
     }
 
@@ -547,7 +546,6 @@ object RemoteProgressBridge {
         if (urls.isEmpty()) return
         Coroutine.async {
             deleteBooksFromQReadShelfIfEnabled(urls)
-            Unit
         }
     }
 
@@ -840,8 +838,7 @@ object RemoteProgressBridge {
     }
 
     /**
-     * 使用 [ReadController.getBookSources] 拉取书源摘要，
-     * 其中 enabled/enabledExplore/bookSourceGroup 以摘要返回为准。
+     * 拉取书源摘要，其中 enabled/enabledExplore/bookSourceGroup 以摘要返回为准。
      */
     private fun fetchBookSourceSummariesFromReadApi(
         baseUrl: String,
@@ -885,7 +882,7 @@ object RemoteProgressBridge {
         }
     }
 
-    private suspend fun fetchBookSourceJsonPayloadQRead(
+    private fun fetchBookSourceJsonPayloadQRead(
         baseUrl: String,
         token: String,
         ids: List<String>
@@ -918,8 +915,7 @@ object RemoteProgressBridge {
     }
 
     /**
-     * 使用 [RssController.getRssSourcess] 一次拉全量摘要（与轻阅读一致），
-     * 避免 [getRssSourcessNew] 分页缓存未实现的问题。
+     * 一次拉全量 RSS 摘要（与轻阅读一致），避免分页缓存未实现的问题。
      */
     private fun fetchRssSourceSummariesQRead(
         baseUrl: String,
@@ -964,7 +960,7 @@ object RemoteProgressBridge {
         }
     }
 
-    private suspend fun fetchRssSourceDetailQRead(
+    private fun fetchRssSourceDetailQRead(
         baseUrl: String,
         token: String,
         sourceUrl: String
@@ -1056,7 +1052,7 @@ object RemoteProgressBridge {
             .addQueryParameter(PARAM_ACCESS_TOKEN, token)
             .addQueryParameter(PARAM_VERSION, QREAD_CLIENT_VERSION)
             .apply {
-                if (!name.isNullOrBlank()) {
+                if (name.isNotBlank()) {
                     addQueryParameter(PARAM_NAME, name)
                 }
             }
@@ -1105,7 +1101,7 @@ object RemoteProgressBridge {
         return result
     }
 
-    private suspend fun fetchBookProgressListQReadByPage(
+    private fun fetchBookProgressListQReadByPage(
         baseUrl: String,
         token: String
     ): List<QReadBookProgressPayload> {
@@ -1147,18 +1143,18 @@ object RemoteProgressBridge {
             val onePage = okHttpClient.newCall(request).execute().use { response ->
                 if (!response.isSuccessful) {
                     AppLog.put("$LOG_QREAD_PREFIX getBookshelfNew HTTP ${response.code}, page=$page")
-                    return@use emptyList<QReadBookProgressPayload>()
+                    return@use emptyList()
                 }
                 val body = response.body.string()
-                val root = runCatching { JSONObject(body) }.getOrNull() ?: return@use emptyList<QReadBookProgressPayload>()
+                val root = runCatching { JSONObject(body) }.getOrNull() ?: return@use emptyList()
                 if (!root.optBoolean(QREAD_IS_SUCCESS, false)) {
                     val errorMsg = root.optString(QREAD_ERROR_MSG)
                     if (errorMsg.isNotBlank()) {
                         AppLog.put("$LOG_QREAD_PREFIX getBookshelfNew isSuccess=false, page=$page, error=$errorMsg")
                     }
-                    return@use emptyList<QReadBookProgressPayload>()
+                    return@use emptyList()
                 }
-                val dataArray = root.optJSONArray(QREAD_DATA) ?: return@use emptyList<QReadBookProgressPayload>()
+                val dataArray = root.optJSONArray(QREAD_DATA) ?: return@use emptyList()
                 parseQReadProgressPayloads(dataArray)
             }
             all.addAll(onePage)
