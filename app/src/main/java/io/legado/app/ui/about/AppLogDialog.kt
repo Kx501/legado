@@ -26,6 +26,10 @@ import java.util.*
 class AppLogDialog : BaseDialogFragment(R.layout.dialog_recycler_view),
     Toolbar.OnMenuItemClickListener {
 
+    companion object {
+        private const val FOLD_PREVIEW_LEN = 40
+    }
+
     private val binding by viewBinding(DialogRecyclerViewBinding::bind)
     private val adapter by lazy {
         LogAdapter(requireContext())
@@ -72,14 +76,27 @@ class AppLogDialog : BaseDialogFragment(R.layout.dialog_recycler_view),
             payloads: MutableList<Any>
         ) {
             binding.textTime.text = LogUtils.logTimeFormat.format(Date(item.first))
-            binding.textMessage.text = item.second
+            val raw = item.second
+            val unfolded = AppLog.unfold(raw)
+            val showPreview = item.third == null && AppLog.isFolded(raw)
+            binding.textMessage.text = if (showPreview && unfolded.length > FOLD_PREVIEW_LEN) {
+                "${unfolded.take(FOLD_PREVIEW_LEN)}…（点击查看全文）"
+            } else {
+                unfolded
+            }
         }
 
         override fun registerListener(holder: ItemViewHolder, binding: ItemAppLogBinding) {
             binding.root.onClick {
                 getItem(holder.layoutPosition)?.let { item ->
-                    item.third?.let {
-                        showDialogFragment(TextDialog("Log", it.stackTraceToString()))
+                    val throwable = item.third
+                    if (throwable != null) {
+                        showDialogFragment(TextDialog("Log", throwable.stackTraceToString()))
+                        return@let
+                    }
+                    val raw = item.second
+                    if (AppLog.isFolded(raw)) {
+                        showDialogFragment(TextDialog("Log", AppLog.unfold(raw)))
                     }
                 }
             }

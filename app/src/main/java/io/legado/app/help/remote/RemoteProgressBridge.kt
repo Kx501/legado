@@ -136,7 +136,12 @@ object RemoteProgressBridge {
             val msg = lazyMsg()
             LogUtils.d(TAG_QREAD_PUSH, msg)
             if (AppConfig.recordLog) {
-                AppLog.putNotSave("[$TAG_QREAD_PUSH] $msg")
+                val full = "[$TAG_QREAD_PUSH] $msg"
+                if (full.length > 120) {
+                    AppLog.putNotSaveFold(full)
+                } else {
+                    AppLog.putNotSave(full)
+                }
             }
         }
     }
@@ -147,16 +152,16 @@ object RemoteProgressBridge {
 
     private fun startQReadHeartbeat(webSocket: WebSocket) {
         val seq = ++qreadHeartbeatSeq
-        qreadPushDebug { "heartbeat start interval=${QREAD_HEARTBEAT_INTERVAL_MS}ms" }
+        qreadPushDebug { "←[WS] 心跳启动，间隔=${QREAD_HEARTBEAT_INTERVAL_MS}ms" }
         Coroutine.async {
             while (qreadHeartbeatSeq == seq && qreadSocket === webSocket) {
                 delay(QREAD_HEARTBEAT_INTERVAL_MS)
                 if (qreadHeartbeatSeq != seq || qreadSocket !== webSocket) break
                 val sent = runCatching { webSocket.send(QREAD_HEARTBEAT_PAYLOAD) }.getOrDefault(false)
-                qreadPushDebug { "heartbeat send ok=$sent" }
+                qreadPushDebug { "←[WS] 发送心跳，ok=$sent" }
                 if (!sent) break
             }
-            qreadPushDebug { "heartbeat stop seq=$seq" }
+            qreadPushDebug { "[WS] 心跳停止，seq=$seq" }
         }
     }
 
@@ -337,41 +342,36 @@ object RemoteProgressBridge {
 
     fun startQReadPushIfEnabled() {
         if (!AppConfig.remoteSyncMode.equals(MODE_QREAD, true)) {
-            qreadPushDebug { "skip: remoteSyncMode=${AppConfig.remoteSyncMode}" }
+            qreadPushDebug { "[WS] 跳过连接，remoteSyncMode=${AppConfig.remoteSyncMode}" }
             return
         }
         val baseUrl = AppConfig.qreadBaseUrl.trimEnd('/')
         val token = AppConfig.qreadToken.trim()
         if (baseUrl.isBlank() || token.isBlank()) {
-            qreadPushDebug { "skip: baseUrlOrTokenBlank baseUrlLen=${baseUrl.length} tokenLen=${token.length}" }
+            qreadPushDebug { "[WS] 跳过连接，地址或令牌为空" }
             return
         }
         if (qreadSocket != null || qreadSocketConnecting) {
-            qreadPushDebug { "skip: already socket=${qreadSocket != null} connecting=$qreadSocketConnecting" }
+            qreadPushDebug { "[WS] 跳过连接，已有连接/连接中（socket=${qreadSocket != null}, connecting=$qreadSocketConnecting）" }
             return
         }
         qreadSocketConnecting = true
         val wsUrl = qreadWebSocketUrl(baseUrl, token) ?: run {
             qreadSocketConnecting = false
-            qreadPushDebug { "abort: qreadWebSocketUrl null (invalid baseUrl scheme?)" }
+            qreadPushDebug { "[WS] 连接中止，地址构建失败（协议可能非法）" }
             return
         }
-        qreadPushDebug { "connect ${maskQreadWebSocketUrlForLog(wsUrl)}" }
+        qreadPushDebug { "←[WS] 发起连接 ${maskQreadWebSocketUrlForLog(wsUrl)}" }
         val request = Request.Builder().url(wsUrl).build()
         qreadSocket = okHttpClient.newWebSocket(request, object : WebSocketListener() {
             override fun onOpen(webSocket: WebSocket, response: Response) {
                 qreadSocketConnecting = false
-                qreadPushDebug { "onOpen http=${response.code} ${response.message}" }
+                qreadPushDebug { "→[WS] 连接成功，http=${response.code} ${response.message}" }
                 startQReadHeartbeat(webSocket)
             }
 
             override fun onMessage(webSocket: WebSocket, text: String) {
-                val snippet = if (text.length <= QREAD_PUSH_MSG_LOG_MAX) {
-                    text
-                } else {
-                    text.take(QREAD_PUSH_MSG_LOG_MAX) + "…(${text.length})"
-                }
-                qreadPushDebug { "onMessage len=${text.length} $snippet" }
+                qreadPushDebug { "→[WS] 收到消息 $text" }
                 handleQReadPushMessage(text)
             }
 
@@ -381,11 +381,11 @@ object RemoteProgressBridge {
                 stopQReadHeartbeat()
                 val err = t.localizedMessage ?: t.message ?: t.javaClass.simpleName
                 qreadPushDebug {
-                    "onFailure http=${response?.code} ${response?.message} err=${t.javaClass.simpleName}: $err"
+                    "[WS] 连接失败，http=${response?.code} ${response?.message} err=${t.javaClass.simpleName}: $err"
                 }
                 AppLog.put("QRead推送连接失败: $err", t)
                 Coroutine.async {
-                    qreadPushDebug { "reconnect in ${QREAD_PUSH_RECONNECT_DELAY_MS}ms" }
+                    qreadPushDebug { "←[WS] ${QREAD_PUSH_RECONNECT_DELAY_MS}ms 后重连" }
                     delay(QREAD_PUSH_RECONNECT_DELAY_MS)
                     startQReadPushIfEnabled()
                 }
@@ -395,9 +395,17 @@ object RemoteProgressBridge {
                 qreadSocket = null
                 qreadSocketConnecting = false
                 stopQReadHeartbeat()
-                qreadPushDebug { "onClosed code=$code reason=$reason" }
+                qreadPushDebug { "[WS] 连接关闭 code=$code reason=$reason" }
             }
         })
+    }
+
+    fun stopQReadPush(reason: String = "manual") {
+        qreadSocketConnecting = false
+        stopQReadHeartbeat()
+        qreadSocket?.close(1000, reason)
+        qreadSocket = null
+        qreadPushDebug { "[WS] 主动断开 reason=$reason" }
     }
 
     private fun qreadWebSocketUrl(baseUrl: String, token: String): String? {
@@ -424,18 +432,18 @@ object RemoteProgressBridge {
 
     private fun handleQReadPushMessage(text: String) {
         val msg = runCatching { JSONObject(text) }.getOrNull() ?: run {
-            qreadPushDebug { "drop: not JSON, head=${text.take(80)}" }
+            qreadPushDebug { "→[WS] 丢弃消息：非JSON，head=${text.take(80)}" }
             return
         }
         when (val kind = msg.optString("msg")) {
             "read" -> {
                 val bookUrlRaw = qreadReadMessageBookUrl(msg)
                 if (bookUrlRaw.isBlank()) {
-                    qreadPushDebug { "read: empty bookurl" }
+                    qreadPushDebug { "→[WS] read 事件无 bookUrl，已忽略" }
                     return
                 }
                 val bookUrlNorm = normalizeQReadBookUrl(bookUrlRaw)
-                qreadPushDebug { "dispatch read(bookUrl.len=${bookUrlNorm.length}) -> update single book progress" }
+                qreadPushDebug { "→[WS] read 事件，bookUrl=$bookUrlNorm，准备同步单书进度" }
                 Coroutine.async {
                     syncBookProgressByPushBookUrl(bookUrlRaw, bookUrlNorm)
                 }
@@ -448,10 +456,10 @@ object RemoteProgressBridge {
                 val md5 = msg.optString("md5").trim()
                 val shouldSync = shouldSyncOnMd5(kind, md5)
                 if (!shouldSync) {
-                    qreadPushDebug { "bookmd5 cache-only md5.len=${md5.length}" }
+                    qreadPushDebug { "→[WS] bookmd5 命中缓存，仅更新本地MD5（md5=$md5）" }
                     return
                 }
-                qreadPushDebug { "dispatch bookmd5 changed -> downloadAllBookProgress md5.len=${md5.length}" }
+                qreadPushDebug { "→[WS] bookmd5 变化，触发全量进度同步（md5=$md5）" }
                 Coroutine.async {
                     downloadAllBookProgress()
                 }
@@ -461,10 +469,10 @@ object RemoteProgressBridge {
                 val md5 = msg.optString("md5").trim()
                 val shouldSync = shouldSyncOnMd5(kind, md5)
                 if (!shouldSync) {
-                    qreadPushDebug { "$kind cache-only md5.len=${md5.length}" }
+                    qreadPushDebug { "→[WS] $kind 命中缓存，仅更新本地MD5（md5=$md5）" }
                     return
                 }
-                qreadPushDebug { "dispatch $kind changed -> syncQReadSourcesIfEnabled md5.len=${md5.length}" }
+                qreadPushDebug { "→[WS] $kind 变化，触发书源/订阅源同步（md5=$md5）" }
                 Coroutine.async {
                     syncQReadSourcesIfEnabled()
                 }
@@ -472,7 +480,7 @@ object RemoteProgressBridge {
 
             else -> {
                 if (kind.isNotEmpty()) {
-                    qreadPushDebug { "ignore msg type=$kind" }
+                    qreadPushDebug { "→[WS] 忽略消息类型 type=$kind" }
                 }
             }
         }
@@ -570,6 +578,7 @@ object RemoteProgressBridge {
                     .addQueryParameter(PARAM_ACCESS_TOKEN, token)
                     .build()
                 val request = Request.Builder().url(requestUrl).post(body).build()
+                qreadPushDebug { "←[HTTP] 删除云端书架 deleteBooks，count=${urls.size}" }
                 okHttpClient.newCall(request).execute().use { response ->
                     if (!response.isSuccessful) {
                         AppLog.put("$LOG_QREAD_PREFIX deleteBooks HTTP ${response.code}")
@@ -748,6 +757,7 @@ object RemoteProgressBridge {
                 .url("$baseUrl${QREAD_PATH_SAVE_BOOK_PROGRESS.format(QREAD_API_VERSION)}")
                 .post(form)
                 .build()
+            qreadPushDebug { "←[HTTP] 上传阅读进度 saveBookProgress，bookUrl=$bookUrl" }
             val uploadOk = okHttpClient.newCall(request).execute().use { response ->
                 if (!response.isSuccessful) {
                     AppLog.put("$LOG_QREAD_PREFIX saveBookProgress HTTP ${response.code}")
@@ -818,6 +828,7 @@ object RemoteProgressBridge {
             .url(requestUrl)
             .post(content.toRequestBody(QREAD_CONTENT_TYPE_JSON.toMediaType()))
             .build()
+        qreadPushDebug { "←[HTTP] 单本入架 saveBooks，bookUrl=${book.bookUrl}" }
         okHttpClient.newCall(request).execute().use { response ->
             if (!response.isSuccessful) {
                 AppLog.put("$LOG_QREAD_PREFIX saveBooks HTTP ${response.code}")
@@ -850,6 +861,7 @@ object RemoteProgressBridge {
             .addQueryParameter("isall", "1")
             .build()
         val request = Request.Builder().url(requestUrl).get().build()
+        qreadPushDebug { "←[HTTP] 拉取书源摘要 getBookSources" }
         return okHttpClient.newCall(request).execute().use { response ->
             if (!response.isSuccessful) {
                 AppLog.put("$LOG_QREAD_PREFIX getBookSources HTTP ${response.code}")
@@ -895,6 +907,7 @@ object RemoteProgressBridge {
             .url(requestUrl)
             .post(JSONArray(ids).toString().toRequestBody(QREAD_CONTENT_TYPE_JSON.toMediaType()))
             .build()
+        qreadPushDebug { "←[HTTP] 拉取书源详情 getbookSourcejson，ids=${ids.size}" }
         okHttpClient.newCall(request).execute().use { response ->
             if (!response.isSuccessful) {
                 AppLog.put("$LOG_QREAD_PREFIX getbookSourcejson HTTP ${response.code}")
@@ -926,6 +939,7 @@ object RemoteProgressBridge {
             .addQueryParameter(PARAM_ACCESS_TOKEN, token)
             .build()
         val request = Request.Builder().url(requestUrl).get().build()
+        qreadPushDebug { "←[HTTP] 拉取RSS摘要 getRssSourcess" }
         return okHttpClient.newCall(request).execute().use { response ->
             if (!response.isSuccessful) {
                 AppLog.put("$LOG_QREAD_PREFIX getRssSourcess HTTP ${response.code}")
@@ -971,6 +985,7 @@ object RemoteProgressBridge {
             .addQueryParameter("id", sourceUrl)
             .build()
         val request = Request.Builder().url(requestUrl).get().build()
+        qreadPushDebug { "←[HTTP] 拉取单个RSS详情 getRssSources" }
         return okHttpClient.newCall(request).execute().use { response ->
             if (!response.isSuccessful) {
                 AppLog.put("$LOG_QREAD_PREFIX getRssSources HTTP ${response.code}")
@@ -1061,6 +1076,7 @@ object RemoteProgressBridge {
             .url(requestUrl)
             .get()
             .build()
+        qreadPushDebug { "←[HTTP] 拉取书架 getBookshelf，hasName=${name.isNotBlank()}" }
         return okHttpClient.newCall(request).execute().use { response ->
             if (!response.isSuccessful) {
                 AppLog.put("$LOG_QREAD_PREFIX getBookshelf HTTP ${response.code}")
@@ -1110,6 +1126,7 @@ object RemoteProgressBridge {
             .addQueryParameter(PARAM_ACCESS_TOKEN, token)
             .build()
         val pageMetaRequest = Request.Builder().url(pageMetaUrl).get().build()
+        qreadPushDebug { "←[HTTP] 拉取分页元信息 getBookshelfPage" }
         val meta = okHttpClient.newCall(pageMetaRequest).execute().use { response ->
             if (!response.isSuccessful) {
                 AppLog.put("$LOG_QREAD_PREFIX getBookshelfPage HTTP ${response.code}")
@@ -1140,6 +1157,7 @@ object RemoteProgressBridge {
                 .addQueryParameter(PARAM_PAGE, page.toString())
                 .build()
             val request = Request.Builder().url(requestUrl).get().build()
+            qreadPushDebug { "←[HTTP] 拉取分页书架 getBookshelfNew，page=$page/$totalPage" }
             val onePage = okHttpClient.newCall(request).execute().use { response ->
                 if (!response.isSuccessful) {
                     AppLog.put("$LOG_QREAD_PREFIX getBookshelfNew HTTP ${response.code}, page=$page")

@@ -225,7 +225,15 @@ class BackupConfigFragment : PreferenceFragment(),
             qreadToken -> listView.post {
                 upPreferenceSummary(key, appCtx.getPrefString(key))
                 if (key == remoteSyncMode) {
-                    updateConfigCategoryVisibility(appCtx.getPrefString(remoteSyncMode))
+                    val mode = appCtx.getPrefString(remoteSyncMode)
+                    updateConfigCategoryVisibility(mode)
+                    onRemoteSyncModeChanged(mode)
+                } else if (key == qreadToken &&
+                    AppConfig.remoteSyncMode.equals(MODE_QREAD, true)
+                ) {
+                    lifecycleScope.launch(IO) {
+                        RemoteProgressBridge.startQReadPushIfEnabled()
+                    }
                 }
                 viewModel.upWebDavConfig()
             }
@@ -397,6 +405,37 @@ class BackupConfigFragment : PreferenceFragment(),
                         )
                     )
                 }
+            }
+        }
+    }
+
+    private fun onRemoteSyncModeChanged(mode: String?) {
+        if (!mode.equals(MODE_QREAD, true)) {
+            RemoteProgressBridge.stopQReadPush("remoteSyncMode switched to $mode")
+            return
+        }
+        val token = appCtx.getPrefString(qreadToken)?.trim().orEmpty()
+        if (token.isNotBlank()) {
+            lifecycleScope.launch(IO) {
+                RemoteProgressBridge.startQReadPushIfEnabled()
+            }
+            return
+        }
+        val baseUrl = appCtx.getPrefString(qreadBaseUrl)?.trim().orEmpty().trimEnd('/')
+        val username = appCtx.getPrefString(qreadUsername)?.trim().orEmpty()
+        val password = appCtx.getPrefString(qreadPassword)?.trim().orEmpty()
+        if (baseUrl.isBlank() || username.isBlank() || password.isBlank()) return
+        lifecycleScope.launch(IO) {
+            runCatching {
+                requestQReadToken(baseUrl, username, password)
+            }.onSuccess { newToken ->
+                appCtx.putPrefString(qreadToken, newToken)
+                withContext(Main) {
+                    upPreferenceSummary(qreadToken, newToken)
+                }
+                RemoteProgressBridge.startQReadPushIfEnabled()
+            }.onFailure { error ->
+                AppLog.put("QRead自动登录失败\n${error.localizedMessage}", error)
             }
         }
     }

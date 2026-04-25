@@ -9,6 +9,8 @@ import splitties.init.appCtx
 
 object AppLog {
 
+    const val FOLD_MARKER = "[[FOLD]]"
+
     private val mLogs = arrayListOf<Triple<Long, String, Throwable?>>()
 
     val logs get() = mLogs.toList()
@@ -53,6 +55,23 @@ object AppLog {
     @Synchronized
     fun clear() {
         mLogs.clear()
+    }
+
+    fun fold(message: String): String = "$FOLD_MARKER$message"
+
+    fun isFolded(message: String): Boolean = message.startsWith(FOLD_MARKER)
+
+    fun unfold(message: String): String =
+        if (isFolded(message)) message.removePrefix(FOLD_MARKER) else message
+
+    fun putFold(message: String?, throwable: Throwable? = null, toast: Boolean = false) {
+        message ?: return
+        put(fold(message), throwable, toast)
+    }
+
+    fun putNotSaveFold(message: String?, throwable: Throwable? = null, toast: Boolean = false) {
+        message ?: return
+        putNotSave(fold(message), throwable, toast)
     }
 
     fun putDebug(message: String?, throwable: Throwable? = null) {

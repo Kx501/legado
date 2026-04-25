@@ -18,5 +18,3 @@ package-lock.json
 .kotlin/
 .cxx
 .vscode
-DOC.md
-read-main/
